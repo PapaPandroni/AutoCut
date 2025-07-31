@@ -1,0 +1,72 @@
+MIT License
+
+Copyright (c) 2024 AutoCut Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## Third-Party Licenses
+
+This software includes or depends on the following third-party components:
+
+### librosa
+Copyright (c) 2013--2024, librosa development team
+Licensed under ISC License
+
+### OpenCV
+Copyright (c) 2000-2024, Intel Corporation, all rights reserved
+Copyright (c) 2009-2011, Willow Garage Inc., all rights reserved
+Copyright (c) 2009-2016, NVIDIA Corporation, all rights reserved
+Copyright (c) 2010-2013, Advanced Micro Devices, Inc., all rights reserved
+Copyright (c) 2015-2016, OpenCV Foundation, all rights reserved
+Copyright (c) 2015-2016, Itseez Inc., all rights reserved
+Licensed under Apache License 2.0
+
+### MediaPipe
+Copyright 2019 The MediaPipe Authors
+Licensed under Apache License 2.0
+
+### NumPy
+Copyright (c) 2005-2024, NumPy Developers
+Licensed under BSD 3-Clause License
+
+### SciPy
+Copyright (c) 2001-2024, SciPy Developers
+Licensed under BSD 3-Clause License
+
+### FFmpeg
+FFmpeg is licensed under the GNU Lesser General Public License (LGPL) version 2.1 or later.
+Some components are licensed under the GNU General Public License (GPL) version 2 or later.
+
+### PyYAML
+Copyright (c) 2017-2024 Ingy döt Net
+Copyright (c) 2006-2016 Kirill Simonov
+Licensed under MIT License
+
+## Attribution
+
+If you use this software in your project, we appreciate attribution with a link back to the original repository.
+
+## Support
+
+This project is provided as-is. For questions, issues, or contributions, please visit:
+https://github.com/your-username/AutoCut
+
+## Disclaimer
+
+This software is designed for personal and educational use. Users are responsible for ensuring they have appropriate rights to process and edit any video content used with this software. The developers are not responsible for any misuse of this software or any legal issues that may arise from its use.

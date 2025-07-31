@@ -1,0 +1,435 @@
+# AutoCut Configuration File Example
+# This file demonstrates all available configuration options for the AutoCut prototype
+# Copy this file to ~/.autocut/config.yaml or specify with --config option
+
+# Processing Configuration
+processing:
+  # Maximum number of worker threads for parallel processing
+  max_workers: 4
+  
+  # Chunk size for processing large files (MB)
+  chunk_size_mb: 100
+  
+  # Cache size for temporary data (MB)
+  cache_size_mb: 500
+  
+  # Maximum memory usage limit (GB)
+  max_memory_usage_gb: 4
+  
+  # Maximum processing time before timeout (minutes)
+  max_processing_time_min: 60
+
+# Audio Analysis Configuration
+audio:
+  # Audio sample rate for analysis
+  sample_rate: 44100
+  
+  # FFT hop length for beat detection
+  hop_length: 512
+  
+  # Beat detection confidence threshold (0.0-1.0)
+  confidence_threshold: 0.7
+  
+  # Beat detection algorithm ('librosa' or 'madmom')
+  beat_detection_algorithm: 'librosa'
+
+# Video Processing Configuration
+video:
+  # Maximum video file size to process (GB)
+  max_file_size_gb: 10
+  
+  # Maximum probe size for video analysis (MB)
+  max_probe_size_mb: 50
+  
+  # Probe timeout for video analysis (seconds)
+  probe_timeout_sec: 30
+  
+  # Enable hardware acceleration when available
+  enable_hardware_acceleration: true
+  
+  # Maximum supported resolution
+  max_resolution_width: 4096
+  max_resolution_height: 4096
+  
+  # Frame rate limits
+  min_fps: 1.0
+  max_fps: 120.0
+
+# Scene Detection Configuration
+scene_detection:
+  # Minimum scene duration (seconds)
+  min_scene_duration_sec: 1.0
+  
+  # Overall confidence threshold for scene changes
+  confidence_threshold: 0.3
+  
+  # Algorithm-specific thresholds
+  histogram_threshold: 0.3
+  edge_threshold: 0.4
+  optical_flow_threshold: 0.5
+  combined_threshold: 0.35
+  
+  # Enable post-processing of scene changes
+  enable_post_processing: true
+  
+  # Maximum concurrent videos for batch processing
+  max_concurrent_videos: 4
+
+# Face Detection Configuration (Optional - requires MediaPipe)
+face_detection:
+  # Enable face detection processing
+  enabled: true
+  
+  # Minimum detection confidence
+  min_detection_confidence: 0.5
+  
+  # Target processing FPS (frames per second)
+  target_fps: 15.0
+  
+  # Processing mode ('realtime', 'balanced', 'quality')
+  processing_mode: 'balanced'
+  
+  # Maximum number of worker threads
+  max_workers: 4
+
+# Quality Scoring Configuration
+quality:
+  # Blur detection threshold (Laplacian variance)
+  blur_threshold: 100.0
+  
+  # Optimal exposure center value (0-255)
+  exposure_optimal_mean: 127.0
+  
+  # Motion blur threshold
+  motion_threshold: 10.0
+  
+  # Composition analysis strength factor
+  composition_strength: 0.3
+  
+  # Default quality profile
+  default_profile: 'adaptive'
+  
+  # Enable face integration in quality scoring
+  enable_face_integration: true
+  
+  # Target processing speed multiplier
+  target_realtime_multiple: 15.0
+  
+  # Enable parallel processing
+  parallel_processing: true
+  
+  # Profile-specific overrides
+  profile_overrides:
+    talking_head:
+      composition_strength: 0.2
+      motion_threshold: 5.0
+    action:
+      motion_threshold: 20.0
+      blur_threshold: 80.0
+    landscape:
+      composition_strength: 0.5
+      exposure_optimal_mean: 140.0
+
+# Timeline Generation Configuration
+timeline:
+  # Clip duration limits (seconds)
+  min_clip_duration_sec: 0.8
+  max_clip_duration_sec: 8.0
+  
+  # Beat alignment threshold (seconds)
+  beat_alignment_threshold: 0.1
+  
+  # Scene override threshold (0.0-1.0)
+  scene_override_threshold: 0.7
+  
+  # Audio silence threshold (dB)
+  silence_threshold_db: -40.0
+  
+  # Tempo change detection threshold (BPM)
+  tempo_change_threshold_bpm: 10.0
+  
+  # Weighting factors for timeline optimization
+  rhythm_consistency_weight: 0.4
+  musical_alignment_weight: 0.6
+  
+  # Feature toggles
+  enable_tempo_detection: true
+  enable_silence_detection: true
+  enable_rhythm_optimization: true
+  
+  # Export format options
+  export_formats: ['json', 'csv', 'edl']
+  default_export_format: 'json'
+
+# Rendering Configuration
+rendering:
+  # Maximum concurrent render jobs
+  max_concurrent_renders: 2
+  
+  # Chunk duration for rendering (seconds)
+  chunk_duration_sec: 30.0
+  
+  # Progress update interval (seconds)
+  progress_update_interval_sec: 0.5
+  
+  # Enable hardware acceleration for rendering
+  enable_hardware_acceleration: true
+  
+  # Prefer stream copy when possible (lossless)
+  prefer_stream_copy: true
+  
+  # Frame-accurate cutting
+  frame_accurate_cuts: true
+  
+  # Quality preset configurations
+  quality_presets:
+    lossless:
+      video_codec: 'copy'
+      audio_codec: 'copy'
+      description: 'Lossless stream copying for maximum speed and quality'
+    
+    high:
+      video_codec: 'libx264'
+      audio_codec: 'aac'
+      crf: 18
+      preset: 'slower'
+      description: 'Visually lossless with minimal compression'
+    
+    medium:
+      video_codec: 'libx264'
+      audio_codec: 'aac'
+      crf: 23
+      preset: 'medium'
+      description: 'Balanced quality and file size'
+    
+    draft:
+      video_codec: 'libx264'
+      audio_codec: 'aac'
+      crf: 28
+      preset: 'ultrafast'
+      description: 'Fast encoding for previews and drafts'
+  
+  # Hardware acceleration preferences (in order of preference)
+  hardware_acceleration:
+    preferred_order: ['videotoolbox', 'nvenc', 'qsv']
+    
+    videotoolbox:
+      h264_encoder: 'h264_videotoolbox'
+      h265_encoder: 'hevc_videotoolbox'
+      prores_encoder: 'prores_videotoolbox'
+    
+    nvenc:
+      h264_encoder: 'h264_nvenc'
+      h265_encoder: 'hevc_nvenc'
+    
+    qsv:
+      h264_encoder: 'h264_qsv'
+      h265_encoder: 'hevc_qsv'
+  
+  # Performance optimization
+  optimization:
+    enable_parallel_processing: true
+    max_parallel_segments: 4
+    memory_limit_gb: 8
+    temp_dir_cleanup: true
+    preserve_temp_files_on_error: false
+    ffmpeg_thread_count: 0  # 0 = auto-detect
+    enable_gpu_acceleration: true
+  
+  # Audio settings for rendering
+  audio:
+    default_bitrate: '192k'
+    sample_rates: [44100, 48000, 96000]
+    codec_preferences: ['aac', 'mp3', 'opus']
+    preserve_original_channels: true
+    normalize_audio: false
+  
+  # Video settings for rendering
+  video:
+    default_bitrate: 'auto'  # Auto-calculate based on resolution
+    max_bitrate: '50M'
+    pixel_format: 'yuv420p'
+    color_range: 'tv'
+    preserve_hdr: false
+  
+  # Export and batch processing
+  export:
+    default_naming_pattern: '{original_name}_edited_{timestamp}'
+    create_export_log: true
+    verify_output_integrity: true
+    auto_open_output_folder: false
+    
+    batch_processing:
+      max_concurrent_jobs: 2
+      auto_queue_failed_jobs: true
+      priority_queue: true
+
+# Output Format Defaults
+output:
+  # Default output settings
+  default_resolution: '1080p'
+  default_fps: 30
+  default_bitrate: '5M'
+  audio_bitrate: '192k'
+  codec: 'h264'
+
+# Logging Configuration
+logging:
+  # Default log level
+  level: 'INFO'
+  
+  # Enable structured logging (JSON format)
+  structured: true
+  
+  # Log file settings
+  log_to_file: false
+  log_file_path: '~/.autocut/logs/autocut.log'
+  
+  # Rotation settings
+  max_log_size_mb: 10
+  max_log_files: 5
+  
+  # Component-specific log levels
+  component_levels:
+    audio: 'INFO'
+    video: 'INFO'
+    scene_detection: 'INFO'
+    face_detection: 'INFO'
+    quality_scoring: 'INFO'
+    timeline: 'INFO'
+    rendering: 'INFO'
+
+# Performance Profiles
+# These can be selected with --performance option
+performance_profiles:
+  speed:
+    description: 'Maximum speed, basic quality (15x+ real-time)'
+    scene_detection_mode: 'speed'
+    face_detection_mode: 'realtime'
+    quality_scoring_enabled: false
+    target_fps: 5.0
+    
+  balanced:
+    description: 'Balance of speed and quality (10x real-time)'
+    scene_detection_mode: 'balanced'
+    face_detection_mode: 'balanced'
+    quality_scoring_enabled: true
+    target_fps: 10.0
+    
+  quality:
+    description: 'Higher quality, moderate speed (5x real-time)'
+    scene_detection_mode: 'quality'
+    face_detection_mode: 'quality'
+    quality_scoring_enabled: true
+    target_fps: 15.0
+    
+  precision:
+    description: 'Maximum quality, all frames (2x real-time)'
+    scene_detection_mode: 'precision'
+    face_detection_mode: 'quality'
+    quality_scoring_enabled: true
+    target_fps: 30.0
+
+# Editing Style Configurations
+editing_styles:
+  aggressive:
+    description: 'Frequent cuts, strong beat sync, scene overrides allowed'
+    beat_weight: 0.4
+    scene_weight: 0.2
+    flow_weight: 0.2
+    duration_weight: 0.2
+    min_clip_duration: 0.5
+    max_clip_duration: 4.0
+    scene_override_threshold: 0.8
+    beat_strictness: 0.9
+    
+  smooth:
+    description: 'Longer clips, prioritize scene boundaries, gentle transitions'
+    beat_weight: 0.25
+    scene_weight: 0.4
+    flow_weight: 0.25
+    duration_weight: 0.1
+    min_clip_duration: 2.0
+    max_clip_duration: 12.0
+    scene_override_threshold: 0.3
+    beat_strictness: 0.6
+    
+  adaptive:
+    description: 'Dynamic adjustment based on content characteristics'
+    beat_weight: 0.3
+    scene_weight: 0.3
+    flow_weight: 0.25
+    duration_weight: 0.15
+    min_clip_duration: 1.0
+    max_clip_duration: 8.0
+    scene_override_threshold: 0.6
+    beat_strictness: 0.75
+    
+  musical:
+    description: 'Strict beat alignment, musical phrasing emphasis'
+    beat_weight: 0.5
+    scene_weight: 0.15
+    flow_weight: 0.25
+    duration_weight: 0.1
+    min_clip_duration: 0.6
+    max_clip_duration: 6.0
+    scene_override_threshold: 0.9
+    beat_strictness: 0.95
+    
+  cinematic:
+    description: 'Story-driven, minimal beat sync, longer segments'
+    beat_weight: 0.15
+    scene_weight: 0.5
+    flow_weight: 0.25
+    duration_weight: 0.1
+    min_clip_duration: 3.0
+    max_clip_duration: 15.0
+    scene_override_threshold: 0.2
+    beat_strictness: 0.4
+
+# Quality Profile Configurations
+quality_profiles:
+  talking_head:
+    description: 'Emphasizes face quality and sharpness'
+    face_weight: 0.25
+    blur_weight: 0.25
+    exposure_weight: 0.20
+    motion_weight: 0.15
+    composition_weight: 0.10
+    color_weight: 0.05
+    
+  action:
+    description: 'Emphasizes motion and exposure handling'
+    face_weight: 0.10
+    blur_weight: 0.20
+    exposure_weight: 0.25
+    motion_weight: 0.25
+    composition_weight: 0.15
+    color_weight: 0.05
+    
+  landscape:
+    description: 'Emphasizes composition and color quality'
+    face_weight: 0.05
+    blur_weight: 0.15
+    exposure_weight: 0.20
+    motion_weight: 0.10
+    composition_weight: 0.30
+    color_weight: 0.20
+    
+  documentary:
+    description: 'Balanced approach with slight face emphasis'
+    face_weight: 0.20
+    blur_weight: 0.20
+    exposure_weight: 0.20
+    motion_weight: 0.15
+    composition_weight: 0.15
+    color_weight: 0.10
+    
+  adaptive:
+    description: 'Dynamic adjustment based on video content'
+    face_weight: 0.15
+    blur_weight: 0.20
+    exposure_weight: 0.20
+    motion_weight: 0.20
+    composition_weight: 0.15
+    color_weight: 0.10

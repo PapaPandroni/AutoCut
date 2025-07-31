@@ -1,0 +1,25 @@
+# Audio processing
+librosa>=0.10.0
+madmom>=0.16.1
+soundfile>=0.12.1
+
+# Video processing  
+opencv-python>=4.8.0
+ffmpeg-python>=0.2.0
+mediapipe>=0.10.0
+
+# General ML/Science
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Development tools
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# Configuration and logging
+pyyaml>=6.0
+structlog>=23.0.0
+
+# Performance monitoring and optimization
+psutil>=5.9.0
+memory-profiler>=0.60.0
