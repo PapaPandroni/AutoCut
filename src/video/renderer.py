@@ -128,6 +128,34 @@ class RenderOptions:
         
         if self.temp_dir is None:
             self.temp_dir = Path(tempfile.gettempdir()) / 'autocut_render'
+    
+    @property
+    def ffmpeg_params(self) -> Dict[str, Any]:
+        """Get FFmpeg parameters for this render configuration"""
+        params = {}
+        if self.target_resolution:
+            width, height = self.target_resolution
+            params['s'] = f'{width}x{height}'
+        if self.target_fps:
+            params['r'] = str(self.target_fps)
+        if self.video_bitrate:
+            params['b:v'] = self.video_bitrate
+        return params
+
+
+@dataclass
+class RenderingResult:
+    """Result from multi-video rendering operation"""
+    success: bool
+    output_path: Optional[Path] = None
+    processing_time: float = 0.0
+    output_file_size: int = 0
+    timeline_duration: float = 0.0
+    segments_rendered: int = 0
+    speed_factor: float = 0.0
+    quality_preset: str = "lossless"
+    hardware_acceleration_used: bool = False
+    error_message: Optional[str] = None
 
 
 class VideoRenderer:
@@ -919,14 +947,40 @@ class VideoRenderer:
         # Sort by original order
         return sorted(stats_list, key=lambda s: s.segments_processed)
     
-    def _cleanup_temp_files(self, temp_dir: Path):
-        """Clean up temporary files"""
+    def _cleanup_temp_files(self, temp_path_or_files: Union[Path, List[Path]]):
+        """Clean up temporary files or directories"""
         try:
             import shutil
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir)
+            
+            # Handle single path (directory)
+            if isinstance(temp_path_or_files, Path):
+                if temp_path_or_files.exists():
+                    shutil.rmtree(temp_path_or_files)
+                    logger.debug("Cleaned up temp directory", path=str(temp_path_or_files))
+            
+            # Handle list of files/paths
+            elif isinstance(temp_path_or_files, list):
+                for file_path in temp_path_or_files:
+                    if file_path.exists():
+                        if file_path.is_file():
+                            file_path.unlink()
+                            logger.debug("Cleaned up temp file", path=str(file_path))
+                        elif file_path.is_dir():
+                            shutil.rmtree(file_path)
+                            logger.debug("Cleaned up temp directory", path=str(file_path))
+                
+                # Also try to cleanup parent temp directories if empty
+                if temp_path_or_files:
+                    temp_dir = temp_path_or_files[0].parent
+                    try:
+                        if temp_dir.exists() and not any(temp_dir.iterdir()):
+                            temp_dir.rmdir()
+                            logger.debug("Cleaned up empty parent directory", path=str(temp_dir))
+                    except Exception:
+                        pass  # Ignore cleanup errors for parent directory
+                        
         except Exception as e:
-            logger.warning("Failed to cleanup temp files", temp_dir=str(temp_dir), error=str(e))
+            logger.warning("Failed to cleanup temp files", error=str(e))
     
     def cancel_render(self, render_id: str) -> bool:
         """Cancel an active render operation"""
@@ -939,6 +993,352 @@ class VideoRenderer:
     def get_active_renders(self) -> List[str]:
         """Get list of active render IDs"""
         return [rid for rid, active in self._active_renders.items() if active]
+    
+    def render_multi_video_timeline(self,
+                                  timeline: EditingTimeline,
+                                  video_info_list: List[VideoInfo],
+                                  music_path: Optional[Path] = None,
+                                  output_path: Optional[Path] = None,
+                                  preset: Union[QualityPreset, str] = QualityPreset.LOSSLESS,
+                                  progress_callback: Optional[Callable] = None) -> RenderingResult:
+        """
+        Render timeline from multiple video sources with external music
+        
+        Args:
+            timeline: EditingTimeline with segments from multiple videos
+            video_info_list: List of VideoInfo for all source videos
+            music_path: Path to external music file (optional)
+            output_path: Path for rendered output
+            preset: Quality preset for rendering
+            progress_callback: Optional progress callback
+            
+        Returns:
+            RenderingResult with processing statistics
+        """
+        start_time = time.time()
+        
+        # Validate and handle output_path parameter
+        if output_path is None:
+            raise ValueError("output_path parameter is required and cannot be None")
+        
+        if isinstance(output_path, bool):
+            raise TypeError(f"output_path cannot be a boolean value (received: {output_path}). "
+                          f"Expected a Path object or path string.")
+        
+        if not isinstance(output_path, Path):
+            try:
+                output_path = Path(output_path)
+            except (TypeError, ValueError) as e:
+                raise TypeError(f"output_path must be a Path object or valid path string. "
+                              f"Received {type(output_path).__name__}: {output_path}") from e
+        
+        # Log the validated output path for debugging
+        logger.debug("Validated output path", output_path=str(output_path), 
+                    output_path_type=type(output_path).__name__)
+        
+        if isinstance(preset, str):
+            preset = QualityPreset(preset.lower())
+            
+        logger.info("Starting multi-video rendering with external music",
+                   timeline_segments=len(timeline.segments),
+                   source_videos=len(video_info_list),
+                   music_file=str(music_path) if music_path else "none",
+                   output_path=str(output_path),
+                   quality_preset=preset.value)
+        
+        try:
+            # Create render options
+            render_options = create_render_options(
+                quality=preset.value if hasattr(preset, 'value') else str(preset),
+                output_format=self._detect_output_format(output_path)
+            )
+            render_options.enable_hardware_acceleration = self.enable_hardware_acceleration
+            
+            # Step 1: Create individual clip files for each segment
+            if progress_callback:
+                progress_callback("Extracting video clips...", 10)
+            
+            clip_files = self._extract_timeline_clips(timeline, video_info_list, progress_callback)
+            
+            # Step 2: Create concat file for ffmpeg
+            if progress_callback:
+                progress_callback("Preparing video concatenation...", 40)
+                
+            concat_file = self._create_concat_file(clip_files, timeline)
+            
+            # Step 3: Concatenate videos and add music
+            if progress_callback:
+                progress_callback("Rendering final video...", 60)
+            
+            # Log path details before final rendering for debugging
+            logger.debug("About to render final video", 
+                        output_path=str(output_path),
+                        output_path_type=type(output_path).__name__,
+                        output_path_exists=output_path.parent.exists() if isinstance(output_path, Path) else "unknown",
+                        output_path_suffix=output_path.suffix if isinstance(output_path, Path) else "unknown")
+            
+            self._render_final_video_with_music(
+                concat_file=concat_file,
+                music_path=music_path,
+                output_path=output_path,
+                render_options=render_options,
+                timeline_duration=timeline.total_duration,
+                progress_callback=progress_callback
+            )
+            
+            # Step 4: Cleanup temporary files
+            self._cleanup_temp_files(clip_files + [concat_file])
+            
+            # Calculate statistics
+            render_time = time.time() - start_time
+            output_size = output_path.stat().st_size if output_path.exists() else 0
+            
+            result = RenderingResult(
+                success=True,
+                output_path=output_path,
+                processing_time=render_time,
+                output_file_size=output_size,
+                timeline_duration=timeline.total_duration,
+                segments_rendered=len(timeline.segments),
+                speed_factor=timeline.total_duration / render_time if render_time > 0 else 0,
+                quality_preset=preset.value,
+                hardware_acceleration_used=self.enable_hardware_acceleration
+            )
+            
+            if progress_callback:
+                progress_callback("Rendering complete!", 100)
+            
+            logger.info("Multi-video rendering completed successfully",
+                       output_file=str(output_path),
+                       file_size_mb=f"{output_size / (1024*1024):.1f}",
+                       render_time=f"{render_time:.2f}s",
+                       speed_factor=f"{result.speed_factor:.1f}x")
+            
+            return result
+            
+        except Exception as e:
+            logger.error("Multi-video rendering failed", error=str(e))
+            # Cleanup on failure
+            try:
+                if 'clip_files' in locals():
+                    self._cleanup_temp_files(clip_files)
+                if 'concat_file' in locals():
+                    self._cleanup_temp_files([concat_file])
+            except:
+                pass
+            
+            return RenderingResult(
+                success=False,
+                error_message=str(e),
+                processing_time=time.time() - start_time
+            )
+    
+    def _detect_output_format(self, output_path: Path) -> str:
+        """Detect output format from file extension"""
+        if not output_path:
+            return "mp4"
+        
+        suffix = output_path.suffix.lower()
+        format_map = {
+            '.mp4': 'mp4',
+            '.mov': 'mov', 
+            '.avi': 'avi',
+            '.mkv': 'mkv',
+            '.webm': 'webm'
+        }
+        return format_map.get(suffix, 'mp4')
+    
+    def _extract_timeline_clips(self, timeline: EditingTimeline, video_info_list: List[VideoInfo], 
+                              progress_callback: Optional[Callable] = None) -> List[Path]:
+        """Extract individual clips for each timeline segment"""
+        clip_files = []
+        temp_dir = Path(tempfile.mkdtemp(prefix="autocut_clips_"))
+        
+        for i, segment in enumerate(timeline.segments):
+            if progress_callback:
+                progress = 10 + (i / len(timeline.segments)) * 30  # 10-40% range
+                progress_callback(f"Extracting clip {i+1}/{len(timeline.segments)}", progress)
+            
+            # Get source video info
+            video_info = video_info_list[segment.source_video_index]
+            source_path = video_info.file_path
+            
+            # Create clip file path
+            clip_path = temp_dir / f"clip_{i:04d}.mp4"
+            
+            # Extract clip using ffmpeg with precise timing
+            try:
+                input_stream = ffmpeg.input(
+                    str(source_path),
+                    ss=segment.source_start_time,
+                    t=segment.duration
+                )
+                
+                # Use stream copy for speed when possible
+                output_stream = ffmpeg.output(
+                    input_stream,
+                    str(clip_path),
+                    c='copy',  # Stream copy for lossless and speed
+                    avoid_negative_ts='make_zero'
+                )
+                
+                ffmpeg.run(output_stream, quiet=True, overwrite_output=True)
+                clip_files.append(clip_path)
+                
+                logger.debug("Extracted clip", 
+                           clip_path=clip_path.name,
+                           source_video=source_path.name,
+                           start_time=f"{segment.source_start_time:.2f}s",
+                           duration=f"{segment.duration:.2f}s")
+                
+            except Exception as e:
+                logger.error("Failed to extract clip", 
+                           source_video=str(source_path),
+                           start_time=segment.source_start_time,
+                           duration=segment.duration,
+                           error=str(e))
+                raise RuntimeError(f"Failed to extract clip from {source_path}: {e}")
+        
+        return clip_files
+    
+    def _create_concat_file(self, clip_files: List[Path], timeline: EditingTimeline) -> Path:
+        """Create FFmpeg concat file for joining clips"""
+        temp_dir = clip_files[0].parent if clip_files else Path(tempfile.gettempdir())
+        concat_file = temp_dir / "concat_list.txt"
+        
+        with open(concat_file, 'w') as f:
+            for clip_file in clip_files:
+                f.write(f"file '{clip_file.absolute()}'\n")
+        
+        logger.debug("Created concat file", file=str(concat_file), clips=len(clip_files))
+        return concat_file
+    
+    def _render_final_video_with_music(self, concat_file: Path, music_path: Optional[Path],
+                                     output_path: Path, render_options, timeline_duration: float,
+                                     progress_callback: Optional[Callable] = None):
+        """Render final video by concatenating clips and adding music"""
+        
+        # Log output path received by this method for debugging
+        logger.debug("_render_final_video_with_music received parameters",
+                    output_path=str(output_path),
+                    output_path_type=type(output_path).__name__,
+                    concat_file=str(concat_file),
+                    has_music=music_path is not None)
+        
+        # Validate output_path to catch any issues early
+        if not isinstance(output_path, Path):
+            raise TypeError(f"_render_final_video_with_music expected Path object for output_path, "
+                          f"got {type(output_path).__name__}: {output_path}")
+        
+        # Build ffmpeg command
+        inputs = []
+        
+        # Input 1: Concatenated video clips
+        video_input = ffmpeg.input(str(concat_file), format='concat', safe=0)
+        inputs.append(video_input)
+        
+        # Input 2: External music (if provided)
+        if music_path and music_path.exists():
+            music_input = ffmpeg.input(str(music_path))
+            inputs.append(music_input)
+            
+            # Log the exact string that will be passed to FFmpeg
+            output_path_str = str(output_path)
+            logger.debug("Creating FFmpeg output with music", 
+                        output_path_string=output_path_str,
+                        ffmpeg_params=render_options.ffmpeg_params,
+                        ffmpeg_params_types={k: type(v).__name__ for k, v in render_options.ffmpeg_params.items()})
+            
+            # Combine video with external music
+            output = ffmpeg.output(
+                video_input['v'], music_input['a'],
+                output_path_str,
+                vcodec='copy',  # Copy video stream for speed
+                acodec='aac',   # Encode audio
+                audio_bitrate='192k',
+                shortest=True,  # Stop when shortest stream ends
+                **render_options.ffmpeg_params
+            )
+        else:
+            # Log the exact string that will be passed to FFmpeg
+            output_path_str = str(output_path)
+            logger.debug("Creating FFmpeg output without music", 
+                        output_path_string=output_path_str,
+                        ffmpeg_params=render_options.ffmpeg_params,
+                        ffmpeg_params_types={k: type(v).__name__ for k, v in render_options.ffmpeg_params.items()})
+            
+            # No external music, just concatenate videos
+            output = ffmpeg.output(
+                video_input,
+                output_path_str,
+                c='copy',  # Copy all streams
+                **render_options.ffmpeg_params
+            )
+        
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.debug("Created output directory", directory=str(output_path.parent))
+        
+        # Run ffmpeg command
+        logger.debug("Running final ffmpeg render", 
+                    output_path=str(output_path),
+                    output_directory=str(output_path.parent),
+                    has_music=music_path is not None)
+        
+        try:
+            # Use -y flag for overwrite instead of overwrite_output parameter
+            ffmpeg.run(output, quiet=True, global_args=['-y'])
+        except ffmpeg.Error as e:
+            stderr_text = e.stderr.decode() if e.stderr else "No stderr"
+            cmd_text = " ".join(e.cmd) if hasattr(e, 'cmd') else "No cmd"
+            
+            # Enhanced error logging for debugging
+            logger.error("FFmpeg execution failed", 
+                        output_path=str(output_path),
+                        output_path_type=type(output_path).__name__,
+                        stderr=stderr_text,
+                        cmd=cmd_text,
+                        ffmpeg_params=render_options.ffmpeg_params)
+            
+            # Check for specific path-related errors
+            if "Unable to choose an output format" in stderr_text and "True" in stderr_text:
+                logger.error("FFmpeg failed due to boolean parameter passed as filename (likely from ffmpeg-python library)",
+                           attempted_output_path=str(output_path),
+                           output_path_type=type(output_path).__name__,
+                           stderr=stderr_text)
+                raise RuntimeError(
+                    f"FFmpeg parameter error: A boolean value was incorrectly passed as a parameter to FFmpeg. "
+                    f"This is likely a bug in the FFmpeg library integration. "
+                    f"Output path was valid: {output_path} (type: {type(output_path).__name__}). "
+                    f"Check FFmpeg parameter handling in the code."
+                )
+            elif "Unable to choose an output format" in stderr_text:
+                logger.error("FFmpeg failed due to invalid output format or path",
+                           output_path=str(output_path),
+                           output_path_suffix=getattr(output_path, 'suffix', 'unknown'),
+                           stderr=stderr_text)
+                raise RuntimeError(
+                    f"Invalid output path or format: FFmpeg cannot determine the output format. "
+                    f"Path: {output_path}, File extension: {getattr(output_path, 'suffix', 'none')}. "
+                    f"Please ensure the output path has a valid video file extension (.mp4, .mov, .avi, etc.)"
+                )
+            elif "No such file or directory" in stderr_text:
+                logger.error("FFmpeg failed due to missing input or output directory",
+                           output_path=str(output_path),
+                           output_directory_exists=output_path.parent.exists(),
+                           stderr=stderr_text)
+                raise RuntimeError(
+                    f"File system error: FFmpeg cannot access required files or directories. "
+                    f"Output path: {output_path}, Parent directory exists: {output_path.parent.exists()}. "
+                    f"Check file permissions and directory structure."
+                )
+            else:
+                # Generic FFmpeg error
+                logger.error("FFmpeg rendering failed with unknown error", 
+                            stderr=stderr_text,
+                            cmd=cmd_text,
+                            output_path=str(output_path))
+                raise RuntimeError(f"Video rendering failed: {stderr_text[:200]}...")
     
     def shutdown(self):
         """Shutdown renderer and cleanup resources"""
@@ -1044,253 +1444,3 @@ def estimate_render_time(timeline: EditingTimeline, options: RenderOptions) -> f
     else:
         # High quality encoding
         return duration * 1.5   # 0.67x real-time
-
-    def render_multi_video_timeline(self,
-                                  timeline: EditingTimeline,
-                                  video_info_list: List[VideoInfo],
-                                  music_path: Optional[Path] = None,
-                                  output_path: Path = None,
-                                  preset: Union[QualityPreset, str] = QualityPreset.LOSSLESS,
-                                  progress_callback: Optional[Callable] = None) -> 'RenderingResult':
-        """
-        Render timeline from multiple video sources with external music
-        
-        Args:
-            timeline: EditingTimeline with segments from multiple videos
-            video_info_list: List of VideoInfo for all source videos
-            music_path: Path to external music file (optional)
-            output_path: Path for rendered output
-            preset: Quality preset for rendering
-            progress_callback: Optional progress callback
-            
-        Returns:
-            RenderingResult with processing statistics
-        """
-        start_time = time.time()
-        
-        if isinstance(preset, str):
-            preset = QualityPreset(preset.lower())
-            
-        logger.info("Starting multi-video rendering with external music",
-                   timeline_segments=len(timeline.segments),
-                   source_videos=len(video_info_list),
-                   music_file=str(music_path) if music_path else "none",
-                   output_path=str(output_path),
-                   quality_preset=preset.value)
-        
-        try:
-            # Create render options
-            render_options = create_render_options(
-                quality_preset=preset,
-                output_format=self._detect_output_format(output_path),
-                hardware_acceleration=self.hardware_acceleration_enabled
-            )
-            
-            # Step 1: Create individual clip files for each segment
-            if progress_callback:
-                progress_callback("Extracting video clips...", 10)
-            
-            clip_files = self._extract_timeline_clips(timeline, video_info_list, progress_callback)
-            
-            # Step 2: Create concat file for ffmpeg
-            if progress_callback:
-                progress_callback("Preparing video concatenation...", 40)
-                
-            concat_file = self._create_concat_file(clip_files, timeline)
-            
-            # Step 3: Concatenate videos and add music
-            if progress_callback:
-                progress_callback("Rendering final video...", 60)
-            
-            self._render_final_video_with_music(
-                concat_file=concat_file,
-                music_path=music_path,
-                output_path=output_path,
-                render_options=render_options,
-                timeline_duration=timeline.duration,
-                progress_callback=progress_callback
-            )
-            
-            # Step 4: Cleanup temporary files
-            self._cleanup_temp_files(clip_files + [concat_file])
-            
-            # Calculate statistics
-            render_time = time.time() - start_time
-            output_size = output_path.stat().st_size if output_path.exists() else 0
-            
-            result = RenderingResult(
-                success=True,
-                output_path=output_path,
-                processing_time=render_time,
-                output_file_size=output_size,
-                timeline_duration=timeline.duration,
-                segments_rendered=len(timeline.segments),
-                speed_factor=timeline.duration / render_time if render_time > 0 else 0,
-                quality_preset=preset.value,
-                hardware_acceleration_used=self.hardware_acceleration_enabled
-            )
-            
-            if progress_callback:
-                progress_callback("Rendering complete!", 100)
-            
-            logger.info("Multi-video rendering completed successfully",
-                       output_file=str(output_path),
-                       file_size_mb=f"{output_size / (1024*1024):.1f}",
-                       render_time=f"{render_time:.2f}s",
-                       speed_factor=f"{result.speed_factor:.1f}x")
-            
-            return result
-            
-        except Exception as e:
-            logger.error("Multi-video rendering failed", error=str(e))
-            # Cleanup on failure
-            try:
-                if 'clip_files' in locals():
-                    self._cleanup_temp_files(clip_files)
-                if 'concat_file' in locals():
-                    self._cleanup_temp_files([concat_file])
-            except:
-                pass
-            
-            return RenderingResult(
-                success=False,
-                error_message=str(e),
-                processing_time=time.time() - start_time
-            )
-    
-    def _extract_timeline_clips(self, timeline: EditingTimeline, video_info_list: List[VideoInfo], 
-                              progress_callback: Optional[Callable] = None) -> List[Path]:
-        """Extract individual clips for each timeline segment"""
-        clip_files = []
-        temp_dir = Path(tempfile.mkdtemp(prefix="autocut_clips_"))
-        
-        for i, segment in enumerate(timeline.segments):
-            if progress_callback:
-                progress = 10 + (i / len(timeline.segments)) * 30  # 10-40% range
-                progress_callback(f"Extracting clip {i+1}/{len(timeline.segments)}", progress)
-            
-            # Get source video info
-            video_info = video_info_list[segment.source_video_index]
-            source_path = video_info.file_path
-            
-            # Create clip file path
-            clip_path = temp_dir / f"clip_{i:04d}.mp4"
-            
-            # Extract clip using ffmpeg with precise timing
-            try:
-                input_stream = ffmpeg.input(
-                    str(source_path),
-                    ss=segment.source_start_time,
-                    t=segment.duration
-                )
-                
-                # Use stream copy for speed when possible
-                output_stream = ffmpeg.output(
-                    input_stream,
-                    str(clip_path),
-                    c='copy',  # Stream copy for lossless and speed
-                    avoid_negative_ts='make_zero'
-                )
-                
-                ffmpeg.run(output_stream, quiet=True, overwrite_output=True)
-                clip_files.append(clip_path)
-                
-                logger.debug("Extracted clip", 
-                           clip_path=clip_path.name,
-                           source_video=source_path.name,
-                           start_time=f"{segment.source_start_time:.2f}s",
-                           duration=f"{segment.duration:.2f}s")
-                
-            except Exception as e:
-                logger.error("Failed to extract clip", 
-                           source_video=str(source_path),
-                           start_time=segment.source_start_time,
-                           duration=segment.duration,
-                           error=str(e))
-                raise RuntimeError(f"Failed to extract clip from {source_path}: {e}")
-        
-        return clip_files
-    
-    def _create_concat_file(self, clip_files: List[Path], timeline: EditingTimeline) -> Path:
-        """Create FFmpeg concat file for joining clips"""
-        temp_dir = clip_files[0].parent if clip_files else Path(tempfile.gettempdir())
-        concat_file = temp_dir / "concat_list.txt"
-        
-        with open(concat_file, 'w') as f:
-            for clip_file in clip_files:
-                f.write(f"file '{clip_file.absolute()}'\n")
-        
-        logger.debug("Created concat file", file=str(concat_file), clips=len(clip_files))
-        return concat_file
-    
-    def _render_final_video_with_music(self, concat_file: Path, music_path: Optional[Path],
-                                     output_path: Path, render_options, timeline_duration: float,
-                                     progress_callback: Optional[Callable] = None):
-        """Render final video by concatenating clips and adding music"""
-        
-        # Build ffmpeg command
-        inputs = []
-        
-        # Input 1: Concatenated video clips
-        video_input = ffmpeg.input(str(concat_file), format='concat', safe=0)
-        inputs.append(video_input)
-        
-        # Input 2: External music (if provided)
-        if music_path and music_path.exists():
-            music_input = ffmpeg.input(str(music_path))
-            inputs.append(music_input)
-            
-            # Combine video with external music
-            output = ffmpeg.output(
-                video_input['v'], music_input['a'],
-                str(output_path),
-                vcodec='copy',  # Copy video stream for speed
-                acodec='aac',   # Encode audio
-                audio_bitrate='192k',
-                shortest=True,  # Stop when shortest stream ends
-                **render_options.ffmpeg_params
-            )
-        else:
-            # No external music, just concatenate videos
-            output = ffmpeg.output(
-                video_input,
-                str(output_path),
-                c='copy',  # Copy all streams
-                **render_options.ffmpeg_params
-            )
-        
-        # Run ffmpeg command
-        logger.debug("Running final ffmpeg render", 
-                    output_path=str(output_path),
-                    has_music=music_path is not None)
-        
-        try:
-            ffmpeg.run(output, quiet=True, overwrite_output=True)
-        except ffmpeg.Error as e:
-            logger.error("FFmpeg rendering failed", 
-                        stderr=e.stderr.decode() if e.stderr else "No stderr",
-                        cmd=" ".join(e.cmd) if hasattr(e, 'cmd') else "No cmd")
-            raise RuntimeError(f"Video rendering failed: {e}")
-    
-    def _cleanup_temp_files(self, files: List[Path]):
-        """Clean up temporary files"""
-        for file_path in files:
-            try:
-                if file_path.exists():
-                    if file_path.is_file():
-                        file_path.unlink()
-                    elif file_path.is_dir():
-                        # Remove directory and contents
-                        import shutil
-                        shutil.rmtree(file_path)
-            except Exception as e:
-                logger.warning("Failed to cleanup temp file", file=str(file_path), error=str(e))
-        
-        # Also try to cleanup parent temp directories if empty
-        if files:
-            temp_dir = files[0].parent
-            try:
-                if temp_dir.exists() and not any(temp_dir.iterdir()):
-                    temp_dir.rmdir()
-            except Exception:
-                pass  # Ignore cleanup errors

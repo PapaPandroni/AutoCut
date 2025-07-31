@@ -145,12 +145,17 @@ Run the comprehensive test suite:
 # Run all tests
 python -m pytest tests/ -v
 
+# Run video renderer tests specifically  
+python -m pytest tests/test_video_renderer.py -v
+
 # Run performance validation
 python validate_performance.py --quick-test
 
 # Run benchmarks
 python autocut_prototype.py --benchmark
 ```
+
+**Test Coverage**: 470+ unit tests including comprehensive multi-video rendering validation
 
 ## 🤝 Contributing
 
@@ -172,12 +177,31 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **FFmpeg**: Video processing and rendering
 - **NumPy/SciPy**: Numerical computing foundation
 
+## 🔧 Troubleshooting 
+
+### Common Issues
+
+**FFmpeg Error: "Unable to choose an output format"**
+- **Cause**: Invalid output path or missing file extension
+- **Solution**: Ensure output path has proper video extension (.mp4, .mov, .avi, etc.)
+- **Fixed**: Enhanced validation prevents boolean/invalid values from reaching FFmpeg
+
+**AttributeError: 'VideoRenderer' object has no attribute 'render_multi_video_timeline'**
+- **Status**: ✅ **FIXED** - Method structure corrected and comprehensive validation added
+- **If still occurring**: Check you're using the latest version and activate virtual environment
+
+**Memory Issues with Large Videos**
+- Use appropriate performance mode (`--performance speed` for large files)
+- Ensure sufficient disk space for temporary files
+- Consider processing videos in smaller batches
+
 ## 💬 Support
 
 For questions, issues, or feature requests, please:
 - Open an issue on GitHub
 - Check the documentation in the `docs/` directory
 - Review the examples in the `examples/` directory
+- Check `CLAUDE.md` for recent bug fixes and improvements
 
 ---
 

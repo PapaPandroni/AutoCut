@@ -440,8 +440,23 @@ timeline = timeline_generator.generate_multi_video_timeline(
 
 # Render with external music
 result = renderer.render_multi_video_timeline(
-    timeline, video_info_list, music_file, "highlight_reel.mp4"
+    timeline, video_info_list, music_file, Path("highlight_reel.mp4")
 )
 ```
+
+**Important**: The `output_path` parameter must be a valid `Path` object or string. The method now includes comprehensive validation to prevent common errors:
+- Raises `ValueError` if `output_path` is `None`
+- Raises `TypeError` if `output_path` is a boolean value (prevents FFmpeg "True" filename errors)
+- Automatically converts valid strings to `Path` objects
+- Validates path types before processing begins
+
+## Recent Updates (July 2025)
+
+### VideoRenderer Multi-Video Timeline Fix
+- **Fixed**: `render_multi_video_timeline` method structure and validation
+- **Added**: `RenderingResult` dataclass for consistent return values
+- **Enhanced**: Input validation with specific boolean detection
+- **Improved**: Error messages and debugging capabilities
+- **Testing**: 31 new unit tests for comprehensive coverage
 
 This API reference covers all major components of the AutoCut system. For more detailed examples, see the `examples/` directory in the project repository.

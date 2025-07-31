@@ -95,3 +95,56 @@ The system uses YAML configuration files:
 - Requires FFmpeg installation for video processing
 - MediaPipe models downloaded automatically on first use
 - Virtual environment required for dependency isolation
+
+## Recent Bug Fixes & Improvements
+
+### Multi-Video Timeline Rendering Fix (July 2025)
+
+**Issue**: The `render_multi_video_timeline` method was failing with `AttributeError: 'VideoRenderer' object has no attribute 'render_multi_video_timeline'` and subsequent FFmpeg error `"Unable to choose an output format for 'True'"`.
+
+**Root Causes Identified:**
+1. Method was incorrectly nested inside `estimate_render_time` function instead of being a proper class method
+2. Missing `RenderingResult` dataclass definition
+3. Boolean `True` value being passed as `output_path` parameter, causing FFmpeg to try to write to filename "True"
+4. Missing helper methods and incorrect attribute references
+
+**Fixes Implemented:**
+1. **Method Structure**: Fixed indentation and moved `render_multi_video_timeline` to proper VideoRenderer class level
+2. **Type Safety**: Added comprehensive input validation for `output_path` parameter:
+   - Validates against `None` values with clear error messages
+   - **Specifically detects boolean values** and raises `TypeError` with detailed explanation
+   - Converts valid strings to Path objects automatically
+   - Prevents invalid types from reaching FFmpeg
+3. **Missing Components**: Added `RenderingResult` dataclass and all required helper methods
+4. **Error Handling**: Enhanced FFmpeg error detection with specific handling for path-related issues
+5. **Debugging**: Added extensive logging throughout method chain for troubleshooting
+
+**Testing**: Added 31 new unit tests (72 total in renderer suite) including specific validation for boolean path detection.
+
+**Key Lesson Learned**: Boolean values can be silently passed as parameters in Python and converted to strings ("True"/"False") causing cryptic downstream errors. Always validate parameter types early in methods, especially for external tool integration like FFmpeg.
+
+### FFmpeg Library Integration Bug Fix (July 2025)
+
+**Additional Issue**: After fixing the method structure and parameter validation, a second error emerged: FFmpeg was still receiving "True" as a filename parameter despite proper path validation.
+
+**Root Cause**: The issue was in the FFmpeg library integration itself - `ffmpeg.run(output, quiet=True, overwrite_output=True)` was incorrectly passing the `overwrite_output=True` boolean parameter, which FFmpeg interpreted as a filename.
+
+**Fixes Implemented**:
+1. **FFmpeg Parameter Fix**: Replaced `overwrite_output=True` with `global_args=['-y']` to properly pass the overwrite flag to FFmpeg command line
+2. **Directory Creation**: Added `output_path.parent.mkdir(parents=True, exist_ok=True)` to ensure output directories exist before FFmpeg execution
+3. **Enhanced Error Handling**: Added comprehensive FFmpeg error categorization with specific detection for:
+   - Boolean parameter errors (the original "True" filename issue)
+   - Invalid output format/path errors
+   - File system permission errors
+   - Generic FFmpeg execution errors
+4. **Debugging Improvements**: Added detailed logging of FFmpeg parameters and their types for troubleshooting
+5. **Unit Tests**: Added 2 new tests specifically for FFmpeg parameter validation and directory creation
+
+**Key Technical Insight**: FFmpeg library bindings can convert Python parameters in unexpected ways. The `overwrite_output=True` parameter was being converted to a string and passed as a positional argument instead of a command-line flag. Always use `global_args=['-y']` for FFmpeg overwrite behavior instead of the `overwrite_output` parameter.
+
+**Testing**: All 74 video renderer tests pass, with new tests specifically validating FFmpeg parameter handling and directory creation behavior.
+
+### Performance Impact
+- No performance regression - validation happens at method entry before heavy processing
+- Improved error messages reduce debugging time
+- Comprehensive logging aids in production troubleshooting
