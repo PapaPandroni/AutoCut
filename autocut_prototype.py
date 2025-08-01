@@ -261,34 +261,41 @@ class AutoCutPrototype:
                     progress_callback(f"Processing {video_file.name}...", progress)
                 
                 # Load video
+                step_start = time.time()
                 video_info = self.video_ingestion.load_video(video_file)
                 if not video_info.is_valid:
                     logger.warning("Skipping invalid video", file=str(video_file), 
                                  errors=video_info.validation_errors)
                     continue
                 
+                self.stats['ingestion_time'] += time.time() - step_start
                 all_video_info.append(video_info)
                 
                 # Scene detection
+                step_start = time.time()
                 scene_detection = self.scene_detection.detect_scenes(
                     video_file, SceneDetectionAlgorithm.COMBINED
                 )
+                self.stats['scene_detection_time'] += time.time() - step_start
                 all_scene_detections.append(scene_detection)
                 
                 # Face detection (if enabled)
                 face_detection = None
                 if not export_options.get('no_face_detection', False):
+                    step_start = time.time()
                     if self.face_detection_engine is None:
                         self.face_detection_engine = create_face_detection_engine(video_info)
                     frame_generator = create_video_frame_generator(video_file)
                     face_detection = self.face_detection_engine.process_video_frames(
                         video_info, frame_generator, lambda count, ts: None
                     )
+                    self.stats['face_detection_time'] += time.time() - step_start
                     all_face_detections.append(face_detection)
                 
                 # Quality scoring (if enabled)
                 quality_result = None
                 if not export_options.get('no_quality_scoring', False):
+                    step_start = time.time()
                     if self.quality_scoring is None:
                         self.quality_scoring = create_quality_scorer(
                             video_info,
@@ -306,6 +313,7 @@ class AutoCutPrototype:
                     quality_result = self.quality_scoring.process_video_quality(
                         video_info, frame_generator, face_results_generator
                     )
+                    self.stats['quality_scoring_time'] += time.time() - step_start
                     all_quality_results.append(quality_result)
                 
                 logger.info("Video analysis completed", file=video_file.name,
@@ -367,7 +375,8 @@ class AutoCutPrototype:
             # Calculate overall statistics
             total_time = time.time() - start_time
             total_video_duration = sum(vi.duration for vi in all_video_info)
-            self.stats['total_processing_time'] = total_time
+            self.stats['total_time'] = total_time
+            self.stats['video_duration'] = total_video_duration
             self.stats['overall_speed_factor'] = total_video_duration / total_time if total_time > 0 else 0
             
             if progress_callback:
