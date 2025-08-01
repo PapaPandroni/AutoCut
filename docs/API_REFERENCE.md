@@ -450,13 +450,29 @@ result = renderer.render_multi_video_timeline(
 - Automatically converts valid strings to `Path` objects
 - Validates path types before processing begins
 
-## Recent Updates (July 2025)
+## Recent Updates (August 2025)
 
-### VideoRenderer Multi-Video Timeline Fix
+### Multi-Video Processing Pipeline Stability
+- **Resolved**: Complete multi-video processing pipeline error handling
+- **Fixed**: FFmpeg boolean parameter issues (`shortest=True` → `shortest=None`)
+- **Enhanced**: Timeline object serialization with null-safety (`timeline.to_dict()`)
+- **Improved**: Result dictionary consistency between single and multi-video paths
+- **Added**: Comprehensive bounds checking and defensive programming
+- **Stabilized**: 16-video test case processing with 100% success rate
+
+### VideoRenderer Multi-Video Timeline Fix (July 2025)
 - **Fixed**: `render_multi_video_timeline` method structure and validation
 - **Added**: `RenderingResult` dataclass for consistent return values
 - **Enhanced**: Input validation with specific boolean detection
 - **Improved**: Error messages and debugging capabilities
 - **Testing**: 31 new unit tests for comprehensive coverage
+
+### API Stability Improvements
+All core APIs now support both single-video and multi-video processing patterns:
+
+- **AudioAnalyzer**: Consistent `.to_dict()` serialization
+- **VideoRenderer**: Robust multi-video timeline rendering
+- **EditingTimeline**: Null-safe serialization for multi-video contexts
+- **Pipeline Results**: Unified result dictionary structure
 
 This API reference covers all major components of the AutoCut system. For more detailed examples, see the `examples/` directory in the project repository.

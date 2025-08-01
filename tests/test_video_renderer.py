@@ -1066,10 +1066,10 @@ class TestRenderMultiVideoTimeline:
             render_options = Mock()
             render_options.ffmpeg_params = {}
             
-            # Mock ffmpeg to simulate the "True" filename error
+            # Mock ffmpeg to simulate the "True" filename error using subprocess approach
             with patch('src.video.renderer.ffmpeg.input') as mock_input, \
                  patch('src.video.renderer.ffmpeg.output') as mock_output, \
-                 patch('src.video.renderer.ffmpeg.run') as mock_run:
+                 patch('src.video.renderer.subprocess.run') as mock_subprocess_run:
                 
                 # Configure mocks
                 mock_video_input = Mock()
@@ -1078,14 +1078,18 @@ class TestRenderMultiVideoTimeline:
                 mock_music_input.__getitem__ = Mock(return_value=Mock())
                 
                 mock_input.side_effect = [mock_video_input, mock_music_input]
-                mock_output.return_value = Mock()
                 
-                # Simulate FFmpeg error with "True" in stderr (the original bug)
-                import ffmpeg
-                mock_ffmpeg_error = Mock()
-                mock_ffmpeg_error.stderr = b"Unable to choose an output format for 'True'; use a standard extension"
-                mock_ffmpeg_error.cmd = ["ffmpeg", "-f", "concat", "-safe", "0", "-i", str(concat_file)]
-                mock_run.side_effect = ffmpeg.Error("cmd", "stdout", mock_ffmpeg_error.stderr)
+                # Mock the output stream with a compile method
+                mock_output_stream = Mock()
+                mock_output_stream.compile.return_value = ["ffmpeg", "-f", "concat", "-safe", "0", "-i", str(concat_file), str(output_path)]
+                mock_output.return_value = mock_output_stream
+                
+                # Simulate subprocess returning FFmpeg error with "True" in stderr (original bug scenario)
+                mock_subprocess_result = Mock()
+                mock_subprocess_result.returncode = 1  # Error exit code
+                mock_subprocess_result.stderr = "Unable to choose an output format for 'True'; use a standard extension"
+                mock_subprocess_result.stdout = ""
+                mock_subprocess_run.return_value = mock_subprocess_result
                 
                 # Test that our error handling correctly identifies this as an FFmpeg parameter issue
                 with pytest.raises(RuntimeError) as exc_info:
@@ -1097,11 +1101,11 @@ class TestRenderMultiVideoTimeline:
                         timeline_duration=60.0
                     )
                 
-                # Verify the error message correctly identifies this as a library integration bug
+                # Verify the error message correctly identifies this as a parameter issue (now fixed with subprocess)
                 error_msg = str(exc_info.value)
                 assert "FFmpeg parameter error" in error_msg
                 assert "boolean value was incorrectly passed" in error_msg
-                assert "FFmpeg library integration" in error_msg
+                assert "subprocess execution" in error_msg or "should be fixed" in error_msg
                 assert str(output_path) in error_msg
     
     def test_render_final_video_with_music_directory_creation(self, mock_config):
@@ -1124,14 +1128,24 @@ class TestRenderMultiVideoTimeline:
             # Verify the directory doesn't exist initially
             assert not output_dir.exists()
             
-            # Mock ffmpeg to avoid actual execution
+            # Mock ffmpeg to avoid actual execution using subprocess approach
             with patch('src.video.renderer.ffmpeg.input') as mock_input, \
                  patch('src.video.renderer.ffmpeg.output') as mock_output, \
-                 patch('src.video.renderer.ffmpeg.run') as mock_run:
+                 patch('src.video.renderer.subprocess.run') as mock_subprocess_run:
                 
                 mock_input.return_value = Mock()
-                mock_output.return_value = Mock()
-                mock_run.return_value = None  # Successful execution
+                
+                # Mock the output stream with a compile method
+                mock_output_stream = Mock()
+                mock_output_stream.compile.return_value = ["ffmpeg", "-f", "concat", "-safe", "0", "-i", str(concat_file), str(output_path)]
+                mock_output.return_value = mock_output_stream
+                
+                # Mock successful subprocess execution
+                mock_subprocess_result = Mock()
+                mock_subprocess_result.returncode = 0  # Success
+                mock_subprocess_result.stderr = ""
+                mock_subprocess_result.stdout = ""
+                mock_subprocess_run.return_value = mock_subprocess_result
                 
                 # Test directory creation
                 renderer._render_final_video_with_music(
@@ -1362,17 +1376,29 @@ class TestHelperMethods:
             def progress_callback(message, progress):
                 progress_updates.append((message, progress))
             
-            with patch('src.video.renderer.ffmpeg') as mock_ffmpeg:
+            with patch('src.video.renderer.ffmpeg.input') as mock_input, \
+                 patch('src.video.renderer.ffmpeg.output') as mock_output, \
+                 patch('src.video.renderer.subprocess.run') as mock_subprocess_run:
+                
                 # Create mock objects with subscriptable behavior
                 mock_video_input = Mock()
                 mock_video_input.__getitem__ = Mock(return_value=Mock())  # For video_input['v']
                 mock_music_input = Mock()
                 mock_music_input.__getitem__ = Mock(return_value=Mock())  # For music_input['a']
-                mock_output = Mock()
                 
-                mock_ffmpeg.input.side_effect = [mock_video_input, mock_music_input]
-                mock_ffmpeg.output.return_value = mock_output
-                mock_ffmpeg.run.return_value = None
+                mock_input.side_effect = [mock_video_input, mock_music_input]
+                
+                # Mock the output stream with a compile method
+                mock_output_stream = Mock()
+                mock_output_stream.compile.return_value = ["ffmpeg", "-f", "concat", "-safe", "0", "-i", str(concat_file), str(output_path)]
+                mock_output.return_value = mock_output_stream
+                
+                # Mock successful subprocess execution
+                mock_subprocess_result = Mock()
+                mock_subprocess_result.returncode = 0  # Success
+                mock_subprocess_result.stderr = ""
+                mock_subprocess_result.stdout = ""
+                mock_subprocess_run.return_value = mock_subprocess_result
                 
                 renderer._render_final_video_with_music(
                     concat_file=concat_file,
@@ -1384,12 +1410,12 @@ class TestHelperMethods:
                 )
                 
                 # Verify ffmpeg was called correctly for video + music
-                assert mock_ffmpeg.input.call_count == 2  # Video input + music input
-                mock_ffmpeg.output.assert_called_once()
-                mock_ffmpeg.run.assert_called_once()
+                assert mock_input.call_count == 2  # Video input + music input
+                mock_output.assert_called_once()
+                mock_subprocess_run.assert_called_once()
                 
                 # Check that video and music inputs were used in output
-                output_call_args = mock_ffmpeg.output.call_args[0]
+                output_call_args = mock_output.call_args[0]
                 # Verify video stream is used (mock_video_input with video stream selector)
                 assert len(output_call_args) >= 2  # Should have video and audio streams
     
@@ -1406,13 +1432,24 @@ class TestHelperMethods:
             render_options = Mock()
             render_options.ffmpeg_params = {}
             
-            with patch('src.video.renderer.ffmpeg') as mock_ffmpeg:
-                mock_video_input = Mock()
-                mock_output = Mock()
+            with patch('src.video.renderer.ffmpeg.input') as mock_input, \
+                 patch('src.video.renderer.ffmpeg.output') as mock_output, \
+                 patch('src.video.renderer.subprocess.run') as mock_subprocess_run:
                 
-                mock_ffmpeg.input.return_value = mock_video_input
-                mock_ffmpeg.output.return_value = mock_output
-                mock_ffmpeg.run.return_value = None
+                mock_video_input = Mock()
+                mock_input.return_value = mock_video_input
+                
+                # Mock the output stream with a compile method
+                mock_output_stream = Mock()
+                mock_output_stream.compile.return_value = ["ffmpeg", "-f", "concat", "-safe", "0", "-i", str(concat_file), str(output_path)]
+                mock_output.return_value = mock_output_stream
+                
+                # Mock successful subprocess execution
+                mock_subprocess_result = Mock()
+                mock_subprocess_result.returncode = 0  # Success
+                mock_subprocess_result.stderr = ""
+                mock_subprocess_result.stdout = ""
+                mock_subprocess_run.return_value = mock_subprocess_result
                 
                 renderer._render_final_video_with_music(
                     concat_file=concat_file,
@@ -1423,12 +1460,12 @@ class TestHelperMethods:
                 )
                 
                 # Verify ffmpeg was called correctly for video only
-                assert mock_ffmpeg.input.call_count == 1  # Only video input
-                mock_ffmpeg.output.assert_called_once()
-                mock_ffmpeg.run.assert_called_once()
+                assert mock_input.call_count == 1  # Only video input
+                mock_output.assert_called_once()
+                mock_subprocess_run.assert_called_once()
                 
                 # Check that only video input was used
-                output_call_args = mock_ffmpeg.output.call_args[0]
+                output_call_args = mock_output.call_args[0]
                 assert mock_video_input in output_call_args
     
     def test_render_final_video_ffmpeg_failure(self, mock_config, mock_subprocess):

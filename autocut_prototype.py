@@ -379,10 +379,16 @@ class AutoCutPrototype:
                 'input_videos': [str(vf) for vf in video_files],
                 'music_file': str(music_path) if music_path else "embedded audio",
                 'output_path': str(output_path) if output_path else None,
-                'timeline': combined_timeline,
+                'timeline': combined_timeline.to_dict(),
                 'statistics': self.stats.copy(),
                 'video_info_list': all_video_info,
-                'audio_analysis': audio_analysis
+                'audio_analysis': audio_analysis.to_dict(),
+                'scene_detections': [sd.to_dict() for sd in all_scene_detections],
+                'face_detections': [fd.to_dict() for fd in all_face_detections if fd],
+                'quality_results': [qr.to_dict() for qr in all_quality_results if qr],
+                'render_stats': None,  # Multi-video processing doesn't render final output
+                'processing_stats': self.stats.copy(),
+                'export_results': {}  # TODO: Implement multi-video exports
             }
             
             logger.info("Multi-video processing completed successfully",
@@ -1139,13 +1145,28 @@ def print_pipeline_results(results: Dict[str, Any]):
     print("PIPELINE RESULTS")
     print("="*60)
     
-    # Video info
-    video_info = results['video_info']
-    print(f"Input Video:")
-    print(f"  Duration:    {video_info['duration']:.1f}s")
-    print(f"  Resolution:  {video_info['resolution'][0]}x{video_info['resolution'][1]}")
-    print(f"  Format:      {video_info['container_format']}")
-    print(f"  Codec:       {video_info.get('video_codec', 'unknown')}")
+    # Video info - handle both single video and multi-video cases
+    if 'video_info' in results:
+        # Single video case
+        video_info = results['video_info']
+        print(f"Input Video:")
+        print(f"  Duration:    {video_info['duration']:.1f}s")
+        print(f"  Resolution:  {video_info['resolution'][0]}x{video_info['resolution'][1]}")
+        print(f"  Format:      {video_info['container_format']}")
+        print(f"  Codec:       {video_info.get('video_codec', 'unknown')}")
+    elif 'video_info_list' in results:
+        # Multi-video case
+        video_info_list = results['video_info_list']
+        print(f"Input Videos ({len(video_info_list)} files):")
+        total_duration = sum(vi.duration for vi in video_info_list)
+        print(f"  Total Duration: {total_duration:.1f}s")
+        for i, vi in enumerate(video_info_list):
+            print(f"  Video {i+1}: {vi.file_path.name} ({vi.duration:.1f}s, {vi.resolution[0]}x{vi.resolution[1]})")
+        # Use first video for format/codec info
+        if video_info_list:
+            first_video = video_info_list[0]
+            print(f"  Primary Format: {first_video.container_format}")
+            print(f"  Primary Codec:  {first_video.primary_video_stream.codec.value if first_video.primary_video_stream else 'unknown'}")
     
     # Audio analysis
     audio_info = results['audio_analysis']
@@ -1154,49 +1175,105 @@ def print_pipeline_results(results: Dict[str, Any]):
     print(f"  Beats:       {audio_info['beat_count']}")
     print(f"  Confidence:  {audio_info['confidence']:.2f}")
     
-    # Scene detection
-    scene_info = results['scene_detection']
+    # Scene detection - handle both single and multi-video cases
     print(f"\nScene Detection:")
-    print(f"  Scenes:      {scene_info['scene_count']}")
-    print(f"  Avg Duration: {scene_info['average_scene_duration']:.1f}s")
-    print(f"  Algorithm:   {scene_info['algorithm_used']}")
+    if 'scene_detection' in results:
+        # Single video case
+        scene_info = results['scene_detection']
+        print(f"  Scenes:      {scene_info['scene_count']}")
+    elif 'scene_detections' in results:
+        # Multi-video case
+        scene_detections = results['scene_detections']
+        total_scenes = sum(sd['scene_count'] for sd in scene_detections)
+        print(f"  Total Scenes: {total_scenes}")
+        for i, sd in enumerate(scene_detections):
+            print(f"  Video {i+1}: {sd['scene_count']} scenes")
+    else:
+        print("  No scene detection data available")
     
-    # Face detection (if available)
-    if results['face_detection']:
+    # Additional scene details (only for single video)
+    if 'scene_detection' in results:
+        scene_info = results['scene_detection']
+        print(f"  Avg Duration: {scene_info['average_scene_duration']:.1f}s")
+        print(f"  Algorithm:   {scene_info['algorithm_used']}")
+    
+    # Face detection (if available) - handle both single and multi-video cases
+    if 'face_detection' in results and results['face_detection']:
+        # Single video case
         face_info = results['face_detection']
         print(f"\nFace Detection:")
         print(f"  Faces/sec:   {face_info['faces_per_second']:.1f}")
         print(f"  Quality:     {face_info['overall_quality_score']:.2f}")
         print(f"  Frames:      {face_info['total_frames_processed']}")
+    elif 'face_detections' in results and results['face_detections']:
+        # Multi-video case
+        face_detections = results['face_detections']
+        print(f"\nFace Detection:")
+        total_faces = sum(fd.get('total_faces_detected', 0) for fd in face_detections if fd)
+        print(f"  Total Faces: {total_faces}")
+        avg_quality = sum(fd.get('average_face_quality', 0) for fd in face_detections if fd) / len([fd for fd in face_detections if fd]) if any(face_detections) else 0
+        print(f"  Avg Quality: {avg_quality:.2f}")
+        for i, fd in enumerate(face_detections):
+            if fd:
+                print(f"  Video {i+1}: {fd.get('total_faces_detected', 0)} faces")
     
-    # Quality scoring (if available)
-    if results['quality_scoring']:
+    # Quality scoring (if available) - handle both single and multi-video cases
+    if 'quality_scoring' in results and results['quality_scoring']:
+        # Single video case
         quality_info = results['quality_scoring']
         print(f"\nQuality Scoring:")
         print(f"  Mean Quality: {quality_info['mean_quality']:.1f}")
         print(f"  Trend:       {quality_info['quality_trend']}")
         print(f"  Profile:     {quality_info['profile_used']}")
+    elif 'quality_results' in results and results['quality_results']:
+        # Multi-video case
+        quality_results = results['quality_results']
+        print(f"\nQuality Scoring:")
+        avg_quality = sum(qr.get('mean_quality', 0) for qr in quality_results if qr) / len([qr for qr in quality_results if qr]) if any(quality_results) else 0
+        print(f"  Avg Quality: {avg_quality:.1f}")
+        for i, qr in enumerate(quality_results):
+            if qr:
+                print(f"  Video {i+1}: {qr.get('mean_quality', 0):.1f} quality")
     
-    # Timeline
-    timeline_info = results['timeline']
+    # Timeline - handle both dict and object formats
     print(f"\nTimeline Generation:")
-    print(f"  Segments:    {timeline_info['segment_count']}")
-    print(f"  Avg Duration: {timeline_info['average_segment_duration']:.1f}s")
-    print(f"  Beat Sync:   {timeline_info['beat_sync_percentage']:.1f}%")
-    print(f"  Scene Respect: {timeline_info['scene_respect_percentage']:.1f}%")
-    print(f"  Style:       {timeline_info['editing_style']}")
+    if 'timeline' in results:
+        timeline_info = results['timeline']
+        # Handle both dictionary and object formats
+        if isinstance(timeline_info, dict):
+            print(f"  Segments:    {timeline_info.get('segment_count', 'N/A')}")
+            print(f"  Avg Duration: {timeline_info.get('average_segment_duration', 0):.1f}s")
+            print(f"  Beat Sync:   {timeline_info.get('beat_sync_percentage', 0):.1f}%")
+            print(f"  Scene Respect: {timeline_info.get('scene_respect_percentage', 0):.1f}%")
+            print(f"  Style:       {timeline_info.get('editing_style', 'N/A')}")
+        else:
+            # Fallback for object format
+            print(f"  Segments:    {getattr(timeline_info, 'segment_count', 'N/A')}")
+            print(f"  Duration:    {getattr(timeline_info, 'duration', 0):.1f}s")
+            print(f"  Style:       {getattr(timeline_info, 'editing_style', 'N/A')}")
+    else:
+        print("  No timeline data available")
     
     # Rendering (if available)
-    if results['render_stats']:
+    if 'render_stats' in results and results['render_stats']:
         render_info = results['render_stats']
         print(f"\nVideo Rendering:")
         print(f"  Output Size: {render_info['output_file_size'] / (1024**2):.1f} MB")
         print(f"  Speed:       {render_info['speed_factor']:.1f}x real-time")
         print(f"  Stream Copy: {render_info['used_stream_copy']}")
         print(f"  HW Accel:    {render_info['hardware_acceleration']}")
+    elif 'video_info_list' in results:
+        print(f"\nVideo Rendering:")
+        print(f"  Multi-video processing - no final rendering performed")
     
     # Processing statistics
-    print_processing_stats(results['processing_stats'], video_info['duration'])
+    if 'video_info' in results:
+        duration = results['video_info']['duration']
+    elif 'video_info_list' in results:
+        duration = sum(vi.duration for vi in results['video_info_list'])
+    else:
+        duration = 0.0
+    print_processing_stats(results['processing_stats'], duration)
     
     # Export results
     if results['export_results']:

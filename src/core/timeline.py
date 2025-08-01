@@ -144,7 +144,7 @@ class EditingTimeline:
     def to_dict(self) -> Dict[str, Any]:
         """Convert timeline to dictionary for serialization"""
         return {
-            'video_path': str(self.video_info.file_path),
+            'video_path': str(self.video_info.file_path) if self.video_info else "multi-video",
             'total_duration': self.total_duration,
             'segment_count': self.segment_count,
             'average_segment_duration': self.average_segment_duration,

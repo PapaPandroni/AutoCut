@@ -536,7 +536,7 @@ class VideoRenderer:
             input_size = timeline.video_info.file_size
             
             stats = RenderStats(
-                total_duration=timeline.total_duration,
+                total_duration=timeline.total_duration or timeline.duration,
                 processing_time=processing_time,
                 average_fps=total_frames / processing_time if processing_time > 0 else 0,
                 peak_fps=max(60.0, total_frames / processing_time) if processing_time > 0 else 0,
@@ -757,7 +757,7 @@ class VideoRenderer:
         
         # Calculate total frames for progress
         fps = timeline.video_info.primary_video_stream.fps if timeline.video_info.primary_video_stream else 30.0
-        total_frames = int(timeline.total_duration * fps)
+        total_frames = int((timeline.total_duration or timeline.duration) * fps)
         
         # Start FFmpeg process
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -822,7 +822,7 @@ class VideoRenderer:
             output_size = Path(cmd[-1]).stat().st_size if Path(cmd[-1]).exists() else 0
             
             stats = RenderStats(
-                total_duration=timeline.total_duration,
+                total_duration=timeline.total_duration or timeline.duration,
                 processing_time=processing_time,
                 average_fps=frames_processed / processing_time if processing_time > 0 else 0,
                 peak_fps=peak_fps,
@@ -1082,7 +1082,7 @@ class VideoRenderer:
                 music_path=music_path,
                 output_path=output_path,
                 render_options=render_options,
-                timeline_duration=timeline.total_duration,
+                timeline_duration=timeline.total_duration or timeline.duration,
                 progress_callback=progress_callback
             )
             
@@ -1098,9 +1098,9 @@ class VideoRenderer:
                 output_path=output_path,
                 processing_time=render_time,
                 output_file_size=output_size,
-                timeline_duration=timeline.total_duration,
+                timeline_duration=timeline.total_duration or timeline.duration,
                 segments_rendered=len(timeline.segments),
-                speed_factor=timeline.total_duration / render_time if render_time > 0 else 0,
+                speed_factor=(timeline.total_duration or timeline.duration) / render_time if render_time > 0 and (timeline.total_duration or timeline.duration) else 0,
                 quality_preset=preset.value,
                 hardware_acceleration_used=self.enable_hardware_acceleration
             )
@@ -1117,7 +1117,13 @@ class VideoRenderer:
             return result
             
         except Exception as e:
-            logger.error("Multi-video rendering failed", error=str(e))
+            logger.error("Multi-video rendering failed", 
+                        error=str(e),
+                        error_type=type(e).__name__,
+                        timeline_total_duration=timeline.total_duration,
+                        timeline_duration=timeline.duration,
+                        timeline_segments=len(timeline.segments),
+                        video_info_count=len(video_info_list) if video_info_list else 0)
             # Cleanup on failure
             try:
                 if 'clip_files' in locals():
@@ -1160,6 +1166,8 @@ class VideoRenderer:
                 progress_callback(f"Extracting clip {i+1}/{len(timeline.segments)}", progress)
             
             # Get source video info
+            if segment.source_video_index >= len(video_info_list):
+                raise ValueError(f"Invalid source_video_index {segment.source_video_index} for video_info_list of length {len(video_info_list)}")
             video_info = video_info_list[segment.source_video_index]
             source_path = video_info.file_path
             
@@ -1256,7 +1264,7 @@ class VideoRenderer:
                 vcodec='copy',  # Copy video stream for speed
                 acodec='aac',   # Encode audio
                 audio_bitrate='192k',
-                shortest=True,  # Stop when shortest stream ends
+                shortest=None,  # Stop when shortest stream ends (flag without value)
                 **render_options.ffmpeg_params
             )
         else:
@@ -1286,59 +1294,95 @@ class VideoRenderer:
                     has_music=music_path is not None)
         
         try:
-            # Use -y flag for overwrite instead of overwrite_output parameter
-            ffmpeg.run(output, quiet=True, global_args=['-y'])
-        except ffmpeg.Error as e:
-            stderr_text = e.stderr.decode() if e.stderr else "No stderr"
-            cmd_text = " ".join(e.cmd) if hasattr(e, 'cmd') else "No cmd"
+            # Extract FFmpeg command and add -y flag manually to avoid ffmpeg-python parameter issues
+            cmd_args = output.compile()
             
-            # Enhanced error logging for debugging
-            logger.error("FFmpeg execution failed", 
+            # Insert -y flag after 'ffmpeg' for overwrite behavior
+            if len(cmd_args) > 0 and cmd_args[0] == 'ffmpeg':
+                final_cmd = ['ffmpeg', '-y'] + cmd_args[1:]
+            else:
+                final_cmd = cmd_args
+                if '-y' not in final_cmd:
+                    final_cmd.insert(1, '-y')  # Insert after first element
+            
+            logger.debug("Executing FFmpeg command via subprocess", 
+                        cmd_preview=final_cmd[:5],  # Show first 5 args for debugging
+                        total_args=len(final_cmd))
+            
+            # Execute FFmpeg via subprocess for precise control
+            result = subprocess.run(
+                final_cmd,
+                capture_output=True,
+                text=True,
+                check=False  # We'll handle errors manually
+            )
+            
+            # Check if subprocess execution failed
+            if result.returncode != 0:
+                # Handle subprocess execution error (same error handling as before)
+                stderr_text = result.stderr if result.stderr else "No stderr"
+                cmd_text = " ".join(final_cmd)
+                
+                self._handle_ffmpeg_error(stderr_text, cmd_text, output_path, render_options)
+                
+        except Exception as e:
+            # Handle any other errors (ffmpeg compilation, subprocess issues, etc.)
+            logger.error("Unexpected error during FFmpeg execution", 
+                        error=str(e),
                         output_path=str(output_path),
-                        output_path_type=type(output_path).__name__,
+                        error_type=type(e).__name__)
+            raise RuntimeError(f"Video rendering failed due to unexpected error: {str(e)}")
+    
+    def _handle_ffmpeg_error(self, stderr_text: str, cmd_text: str, output_path: Path, render_options):
+        """Handle FFmpeg errors with detailed categorization and logging"""
+        
+        # Enhanced error logging for debugging
+        logger.error("FFmpeg execution failed", 
+                    output_path=str(output_path),
+                    output_path_type=type(output_path).__name__,
+                    stderr=stderr_text,
+                    cmd=cmd_text,
+                    ffmpeg_params=render_options.ffmpeg_params)
+        
+        # Check for specific path-related errors
+        if "Unable to choose an output format" in stderr_text and "True" in stderr_text:
+            logger.error("FFmpeg failed due to boolean parameter passed as filename (FIXED: now using subprocess)",
+                       attempted_output_path=str(output_path),
+                       output_path_type=type(output_path).__name__,
+                       stderr=stderr_text)
+            raise RuntimeError(
+                f"FFmpeg parameter error: A boolean value was incorrectly passed as a parameter to FFmpeg. "
+                f"This should be fixed with subprocess execution. If you see this error, please report it as a bug. "
+                f"Output path was valid: {output_path} (type: {type(output_path).__name__}). "
+                f"Command executed: {cmd_text[:100]}..."
+            )
+        elif "Unable to choose an output format" in stderr_text:
+            logger.error("FFmpeg failed due to invalid output format or path",
+                       output_path=str(output_path),
+                       output_path_suffix=getattr(output_path, 'suffix', 'unknown'),
+                       stderr=stderr_text)
+            raise RuntimeError(
+                f"Invalid output path or format: FFmpeg cannot determine the output format. "
+                f"Path: {output_path}, File extension: {getattr(output_path, 'suffix', 'none')}. "
+                f"Please ensure the output path has a valid video file extension (.mp4, .mov, .avi, etc.)"
+            )
+        elif "No such file or directory" in stderr_text:
+            logger.error("FFmpeg failed due to missing input or output directory",
+                       output_path=str(output_path),
+                       output_directory_exists=output_path.parent.exists(),
+                       stderr=stderr_text)
+            raise RuntimeError(
+                f"File system error: FFmpeg cannot access required files or directories. "
+                f"Output path: {output_path}, Parent directory exists: {output_path.parent.exists()}. "
+                f"Check file permissions and directory structure."
+            )
+        else:
+            # Generic FFmpeg error
+            logger.error("FFmpeg rendering failed with unknown error", 
                         stderr=stderr_text,
                         cmd=cmd_text,
-                        ffmpeg_params=render_options.ffmpeg_params)
-            
-            # Check for specific path-related errors
-            if "Unable to choose an output format" in stderr_text and "True" in stderr_text:
-                logger.error("FFmpeg failed due to boolean parameter passed as filename (likely from ffmpeg-python library)",
-                           attempted_output_path=str(output_path),
-                           output_path_type=type(output_path).__name__,
-                           stderr=stderr_text)
-                raise RuntimeError(
-                    f"FFmpeg parameter error: A boolean value was incorrectly passed as a parameter to FFmpeg. "
-                    f"This is likely a bug in the FFmpeg library integration. "
-                    f"Output path was valid: {output_path} (type: {type(output_path).__name__}). "
-                    f"Check FFmpeg parameter handling in the code."
-                )
-            elif "Unable to choose an output format" in stderr_text:
-                logger.error("FFmpeg failed due to invalid output format or path",
-                           output_path=str(output_path),
-                           output_path_suffix=getattr(output_path, 'suffix', 'unknown'),
-                           stderr=stderr_text)
-                raise RuntimeError(
-                    f"Invalid output path or format: FFmpeg cannot determine the output format. "
-                    f"Path: {output_path}, File extension: {getattr(output_path, 'suffix', 'none')}. "
-                    f"Please ensure the output path has a valid video file extension (.mp4, .mov, .avi, etc.)"
-                )
-            elif "No such file or directory" in stderr_text:
-                logger.error("FFmpeg failed due to missing input or output directory",
-                           output_path=str(output_path),
-                           output_directory_exists=output_path.parent.exists(),
-                           stderr=stderr_text)
-                raise RuntimeError(
-                    f"File system error: FFmpeg cannot access required files or directories. "
-                    f"Output path: {output_path}, Parent directory exists: {output_path.parent.exists()}. "
-                    f"Check file permissions and directory structure."
-                )
-            else:
-                # Generic FFmpeg error
-                logger.error("FFmpeg rendering failed with unknown error", 
-                            stderr=stderr_text,
-                            cmd=cmd_text,
-                            output_path=str(output_path))
-                raise RuntimeError(f"Video rendering failed: {stderr_text[:200]}...")
+                        output_path=str(output_path))
+            raise RuntimeError(f"Video rendering failed: {stderr_text[:200]}...")
     
     def shutdown(self):
         """Shutdown renderer and cleanup resources"""
@@ -1430,7 +1474,7 @@ def estimate_render_time(timeline: EditingTimeline, options: RenderOptions) -> f
         Estimated rendering time in seconds
     """
     # Base factors for estimation
-    duration = timeline.total_duration
+    duration = timeline.total_duration or timeline.duration
     
     if options.quality_preset == QualityPreset.LOSSLESS and options.use_stream_copy:
         # Stream copy is very fast
