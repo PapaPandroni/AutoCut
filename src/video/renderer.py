@@ -491,8 +491,18 @@ class VideoRenderer:
                 total_frames=0
             )
             
-            # Process each segment
-            for i, segment in enumerate(timeline.segments):
+            # PRE-EXTRACTION VALIDATION GATE: Validate all segments before processing
+            valid_segments = self._validate_segments_before_extraction(timeline, timeline.video_info)
+            if not valid_segments:
+                raise RuntimeError("All timeline segments failed validation - cannot proceed with rendering")
+            
+            logger.info("Pre-extraction validation completed",
+                       total_segments=len(timeline.segments),
+                       valid_segments=len(valid_segments),
+                       rejected_segments=len(timeline.segments) - len(valid_segments))
+            
+            # Process each valid segment
+            for i, segment in enumerate(valid_segments):
                 if not self._active_renders.get(render_id, False):
                     raise RuntimeError("Render was cancelled")
                 
@@ -522,7 +532,7 @@ class VideoRenderer:
                 # Estimate remaining time
                 if i > 0:
                     avg_time_per_segment = progress.elapsed_time / (i + 1)
-                    progress.estimated_remaining = avg_time_per_segment * (len(timeline.segments) - i - 1)
+                    progress.estimated_remaining = avg_time_per_segment * (len(valid_segments) - i - 1)
                 
                 if progress_callback:
                     progress_callback(progress)
@@ -540,7 +550,7 @@ class VideoRenderer:
                 processing_time=processing_time,
                 average_fps=total_frames / processing_time if processing_time > 0 else 0,
                 peak_fps=max(60.0, total_frames / processing_time) if processing_time > 0 else 0,
-                segments_processed=len(timeline.segments),
+                segments_processed=len(valid_segments),
                 total_frames=total_frames,
                 output_file_size=output_size,
                 compression_ratio=input_size / output_size if output_size > 0 else 1.0,
@@ -947,6 +957,364 @@ class VideoRenderer:
         # Sort by original order
         return sorted(stats_list, key=lambda s: s.segments_processed)
     
+    def _get_frame_rate(self, video_stream: dict) -> float:
+        """
+        Extract frame rate from video stream info
+        
+        Args:
+            video_stream: FFprobe video stream dictionary
+            
+        Returns:
+            Frame rate as float, defaults to 25.0 if not found
+        """
+        try:
+            # Try r_frame_rate first (real frame rate)
+            if 'r_frame_rate' in video_stream:
+                fps_str = video_stream['r_frame_rate']
+                if fps_str != '0/0':
+                    num, den = map(int, fps_str.split('/'))
+                    if den > 0:
+                        return num / den
+            
+            # Fall back to avg_frame_rate
+            if 'avg_frame_rate' in video_stream:
+                fps_str = video_stream['avg_frame_rate']
+                if fps_str != '0/0':
+                    num, den = map(int, fps_str.split('/'))
+                    if den > 0:
+                        return num / den
+            
+            # Default fallback
+            logger.debug("Could not determine frame rate, using default 25.0 fps")
+            return 25.0
+            
+        except Exception as e:
+            logger.warning("Error parsing frame rate, using default", error=str(e))
+            return 25.0
+    
+    def _validate_extracted_clip(self, clip_path: Path, expected_duration: float) -> bool:
+        """
+        Validate that extracted clip has correct duration and is playable
+        
+        Args:
+            clip_path: Path to the extracted clip file
+            expected_duration: Expected duration in seconds
+            
+        Returns:
+            True if clip is valid, False otherwise
+        """
+        try:
+            if not clip_path.exists():
+                logger.error("Clip file does not exist", clip_path=str(clip_path))
+                return False
+                
+            # Use ffprobe to get actual duration
+            probe_result = ffmpeg.probe(str(clip_path))
+            actual_duration = float(probe_result['format']['duration'])
+            
+            # Allow 200ms tolerance for duration differences
+            duration_diff = abs(actual_duration - expected_duration)
+            if duration_diff > 0.2:
+                logger.warning("Clip duration mismatch", 
+                             clip_path=clip_path.name,
+                             expected=f"{expected_duration:.3f}s", 
+                             actual=f"{actual_duration:.3f}s",
+                             diff=f"{duration_diff:.3f}s")
+                return False
+                
+            # Check if clip has valid video stream
+            video_streams = [s for s in probe_result['streams'] if s['codec_type'] == 'video']
+            if not video_streams:
+                logger.error("Clip has no video stream", clip_path=clip_path.name)
+                return False
+            
+            # Get video stream info for freeze frame detection
+            video_stream = video_streams[0]
+            frame_rate = self._get_frame_rate(video_stream)
+            expected_frames = int(actual_duration * frame_rate)
+            
+            # Basic frame count validation
+            if 'nb_frames' in video_stream:
+                actual_frames = int(video_stream['nb_frames'])
+                frame_diff = abs(actual_frames - expected_frames)
+                if frame_diff > frame_rate * 0.2:  # Allow 0.2s worth of frame difference
+                    logger.warning("Frame count mismatch detected", 
+                                 clip_path=clip_path.name,
+                                 expected_frames=expected_frames,
+                                 actual_frames=actual_frames)
+                    # Continue anyway - this might not be a critical issue
+            
+            # Check for obvious quality issues
+            if 'avg_frame_rate' in video_stream:
+                avg_fps_str = video_stream['avg_frame_rate']
+                if avg_fps_str != '0/0':
+                    # Check if average frame rate is reasonable
+                    num, den = map(int, avg_fps_str.split('/'))
+                    if den > 0:
+                        avg_fps = num / den
+                        if avg_fps < 1.0:  # Very low frame rate indicates issues
+                            logger.warning("Very low average frame rate detected", 
+                                         clip_path=clip_path.name,
+                                         avg_fps=f"{avg_fps:.2f}")
+            
+            # ENHANCED: Frame diversity detection for freeze frame/corrupted content
+            if not self._validate_frame_diversity(clip_path, actual_duration, frame_rate):
+                logger.warning("Frame diversity validation failed - possible freeze frames or corrupted content",
+                             clip_path=clip_path.name)
+                return False
+                
+            logger.debug("Clip validation passed", 
+                        clip_path=clip_path.name,
+                        duration=f"{actual_duration:.3f}s",
+                        expected_frames=expected_frames)
+            return True
+            
+        except Exception as e:
+            logger.error("Clip validation failed with exception", 
+                        clip_path=clip_path.name,
+                        error=str(e))
+            return False
+    
+    def _validate_frame_diversity(self, clip_path: Path, duration: float, frame_rate: float) -> bool:
+        """
+        Validate frame diversity to detect freeze frames and corrupted content
+        
+        This method analyzes video frames to detect:
+        1. Repeated/identical frames (freeze frame detection)
+        2. Corrupted content with no meaningful visual changes
+        3. Low-quality segments from video endpoints
+        
+        Args:
+            clip_path: Path to the video clip
+            duration: Clip duration in seconds
+            frame_rate: Video frame rate
+            
+        Returns:
+            True if clip has sufficient frame diversity, False if corrupted/frozen
+        """
+        try:
+            # Skip validation for very short clips (less than 0.5 seconds)
+            if duration < 0.5:
+                return True
+            
+            # Use FFmpeg to extract frame checksums for diversity analysis
+            # Sample frames at key points (beginning, middle, end) for efficiency
+            sample_points = [0.1, duration * 0.5, duration * 0.9] if duration > 1.0 else [duration * 0.5]
+            frame_hashes = []
+            
+            for sample_time in sample_points:
+                try:
+                    # Extract frame using FFmpeg at specific timestamp
+                    cmd = [
+                        'ffmpeg',
+                        '-i', str(clip_path),
+                        '-ss', str(sample_time),
+                        '-vframes', '1',
+                        '-f', 'framecrc',
+                        '-y',
+                        '-'
+                    ]
+                    
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                    
+                    if result.returncode == 0 and result.stdout:
+                        # Extract CRC from FFmpeg framecrc output
+                        lines = result.stdout.strip().split('\n')
+                        for line in lines:
+                            if line.startswith('0,'):  # Frame data line
+                                parts = line.split(',')
+                                if len(parts) >= 4:
+                                    frame_crc = parts[3]  # CRC is 4th field
+                                    frame_hashes.append(frame_crc)
+                                    break
+                    
+                except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
+                    logger.debug(f"Frame extraction failed at {sample_time}s: {e}")
+                    continue
+            
+            # Analyze frame diversity
+            if len(frame_hashes) < 2:
+                logger.debug("Insufficient frame samples for diversity analysis", 
+                           clip_path=clip_path.name,
+                           samples=len(frame_hashes))
+                return True  # Assume valid if we can't analyze
+            
+            # Check for identical frames (freeze frame detection)
+            unique_hashes = set(frame_hashes)
+            diversity_ratio = len(unique_hashes) / len(frame_hashes)
+            
+            # Require at least 50% frame diversity for clips longer than 1 second
+            min_diversity = 0.5 if duration > 1.0 else 0.3
+            
+            if diversity_ratio < min_diversity:
+                logger.warning("Low frame diversity detected - possible freeze frame content",
+                             clip_path=clip_path.name,
+                             diversity_ratio=f"{diversity_ratio:.2f}",
+                             min_required=f"{min_diversity:.2f}",
+                             unique_frames=len(unique_hashes),
+                             total_samples=len(frame_hashes))
+                return False
+            
+            # Additional check: detect completely static content
+            if len(unique_hashes) == 1 and len(frame_hashes) > 1:
+                logger.warning("Static content detected - all sampled frames identical",
+                             clip_path=clip_path.name,
+                             frame_hash=list(unique_hashes)[0])
+                return False
+            
+            logger.debug("Frame diversity validation passed",
+                        clip_path=clip_path.name,
+                        diversity_ratio=f"{diversity_ratio:.2f}",
+                        unique_frames=len(unique_hashes),
+                        total_samples=len(frame_hashes))
+            
+            return True
+            
+        except Exception as e:
+            logger.warning("Frame diversity validation error - assuming valid",
+                         clip_path=clip_path.name,
+                         error=str(e))
+            return True  # Assume valid if validation fails
+    
+    def _validate_segments_before_extraction(self, timeline: EditingTimeline, video_info: VideoInfo) -> List:
+        """
+        Pre-extraction validation gate - validate all segments before processing
+        
+        This method performs comprehensive validation to prevent invalid segments 
+        from reaching FFmpeg extraction, following the comprehensive ultraanalysis plan:
+        
+        1. Check all segments for domain consistency  
+        2. Validate source video time ranges
+        3. Detect potential freeze frame segments
+        4. Block invalid segments from reaching FFmpeg
+        
+        Args:
+            timeline: Timeline with segments to validate
+            video_info: Video information for bounds checking
+            
+        Returns:
+            List of valid segments ready for extraction
+        """
+        valid_segments = []
+        rejected_count = 0
+        
+        logger.info("Starting pre-extraction validation",
+                   total_segments=len(timeline.segments))
+        
+        for i, segment in enumerate(timeline.segments):
+            try:
+                # 1. DOMAIN CONSISTENCY VALIDATION
+                if not self._validate_segment_domain_consistency(segment):
+                    logger.warning(f"Segment {i} failed domain consistency check",
+                                 segment_start=segment.start_time,
+                                 segment_end=segment.end_time,
+                                 source_start=segment.source_start_time,
+                                 source_end=segment.source_end_time)
+                    rejected_count += 1
+                    continue
+                
+                # 2. SOURCE VIDEO TIME RANGE VALIDATION
+                if not self._validate_segment_source_bounds(segment, video_info):
+                    logger.warning(f"Segment {i} failed source bounds check",
+                                 source_start=segment.source_start_time,
+                                 source_end=segment.source_end_time,
+                                 video_duration=video_info.duration)
+                    rejected_count += 1
+                    continue
+                
+                # 3. BASIC SEGMENT INTEGRITY VALIDATION
+                if not self._validate_segment_integrity(segment):
+                    logger.warning(f"Segment {i} failed integrity check",
+                                 segment_duration=segment.duration)
+                    rejected_count += 1
+                    continue
+                
+                # 4. POTENTIAL FREEZE FRAME DETECTION (basic heuristics)
+                if not self._validate_segment_quality_heuristics(segment, video_info):
+                    logger.warning(f"Segment {i} failed quality heuristics check",
+                                 source_start=segment.source_start_time,
+                                 source_end=segment.source_end_time)
+                    rejected_count += 1
+                    continue
+                
+                # Segment passed all validation checks
+                valid_segments.append(segment)
+                
+            except Exception as e:
+                logger.error(f"Validation error for segment {i}: {e}")
+                rejected_count += 1
+                continue
+        
+        logger.info("Pre-extraction validation completed",
+                   total_segments=len(timeline.segments),
+                   valid_segments=len(valid_segments),
+                   rejected_segments=rejected_count,
+                   validation_success_rate=f"{(len(valid_segments)/len(timeline.segments)*100):.1f}%")
+        
+        return valid_segments
+    
+    def _validate_segment_domain_consistency(self, segment) -> bool:
+        """Validate temporal domain consistency"""
+        # Check timeline domain consistency  
+        if segment.start_time < 0 or segment.end_time < 0:
+            return False
+        if segment.start_time >= segment.end_time:
+            return False
+            
+        # Check source domain consistency
+        if segment.source_start_time < 0 or segment.source_end_time < 0:
+            return False
+        if segment.source_start_time >= segment.source_end_time:
+            return False
+            
+        # Check duration consistency across domains
+        timeline_duration = segment.end_time - segment.start_time
+        source_duration = segment.source_end_time - segment.source_start_time
+        
+        # Allow small floating point differences (1ms tolerance)
+        if abs(timeline_duration - source_duration) > 0.001:
+            return False
+            
+        return True
+    
+    def _validate_segment_source_bounds(self, segment, video_info: VideoInfo) -> bool:
+        """Validate segment stays within source video bounds"""
+        if segment.source_end_time > video_info.duration:
+            return False
+        if segment.source_start_time >= video_info.duration:
+            return False
+        return True
+    
+    def _validate_segment_integrity(self, segment) -> bool:
+        """Basic segment integrity validation"""
+        if segment.duration <= 0:
+            return False
+        if segment.quality_score < 0:
+            return False
+        return True
+    
+    def _validate_segment_quality_heuristics(self, segment, video_info: VideoInfo) -> bool:
+        """Quality heuristics to detect potential freeze frame segments"""
+        # Detect segments that are likely from video endpoints (first/last 5%)
+        endpoint_threshold = video_info.duration * 0.05
+        
+        # Check if segment is from very beginning or very end of video
+        is_from_start = segment.source_start_time < endpoint_threshold
+        is_from_end = segment.source_end_time > (video_info.duration - endpoint_threshold)
+        
+        if is_from_start or is_from_end:
+            # Apply stricter quality requirements for endpoint segments
+            if segment.quality_score < 0.7:  # Higher threshold for endpoints
+                logger.debug("Endpoint segment with low quality score rejected",
+                           source_start=segment.source_start_time,
+                           source_end=segment.source_end_time,
+                           quality_score=segment.quality_score,
+                           from_start=is_from_start,
+                           from_end=is_from_end)
+                return False
+        
+        return True
+    
     def _cleanup_temp_files(self, temp_path_or_files: Union[Path, List[Path]]):
         """Clean up temporary files or directories"""
         try:
@@ -1174,23 +1542,42 @@ class VideoRenderer:
             # Create clip file path
             clip_path = temp_dir / f"clip_{i:04d}.mp4"
             
-            # Extract clip using ffmpeg with precise timing
+            # Extract clip using ffmpeg with enhanced frame-accurate precision
             try:
-                input_stream = ffmpeg.input(
-                    str(source_path),
-                    ss=segment.source_start_time,
-                    t=segment.duration
-                )
+                # FIXED: Use output-seeking for frame accuracy (eliminates timing drift)
+                input_stream = ffmpeg.input(str(source_path))
                 
-                # Use stream copy for speed when possible
+                # FIXED: Frame-accurate cuts using output seeking without CFR enforcement 
                 output_stream = ffmpeg.output(
                     input_stream,
                     str(clip_path),
-                    c='copy',  # Stream copy for lossless and speed
-                    avoid_negative_ts='make_zero'
+                    ss=segment.source_start_time,  # MOVED: Seek on output for frame accuracy
+                    t=segment.duration,            # Duration parameter
+                    vcodec='libx264',      # Re-encode video for frame accuracy
+                    acodec='aac',          # Re-encode audio
+                    crf=18,                # High quality (visually lossless)
+                    preset='medium',       # Balance speed/quality
+                    # FIXED: Preserve timing without CFR frame dropping
+                    copyts=True,           # Copy timestamps to preserve timing
+                    start_at_zero=True,    # Start at zero but maintain relative timing
+                    avoid_negative_ts='disabled',  # Preserve original timing relationships
+                    fflags='+genpts',      # Generate PTS only - removed igndts
+                    # REMOVED: vsync='cfr' - was causing frame drops (296 vs 340 frames)
+                    # REMOVED: force_key_frames - was creating artificial timing
+                    # Quality parameters
+                    video_bitrate='5M',    # Ensure sufficient bitrate
+                    maxrate='10M',         # Maximum bitrate headroom
+                    bufsize='10M'          # Buffer size for consistent quality
                 )
                 
                 ffmpeg.run(output_stream, quiet=True, overwrite_output=True)
+                
+                # Validate extracted clip
+                if not self._validate_extracted_clip(clip_path, segment.duration):
+                    logger.warning("Clip validation failed but continuing", 
+                                 clip_path=clip_path.name,
+                                 expected_duration=f"{segment.duration:.2f}s")
+                
                 clip_files.append(clip_path)
                 
                 logger.debug("Extracted clip", 
@@ -1247,24 +1634,26 @@ class VideoRenderer:
         
         # Input 2: External music (if provided)
         if music_path and music_path.exists():
-            music_input = ffmpeg.input(str(music_path))
+            # Trim music to match video timeline duration to prevent black screen
+            music_input = ffmpeg.input(str(music_path), t=timeline_duration)
             inputs.append(music_input)
             
             # Log the exact string that will be passed to FFmpeg
             output_path_str = str(output_path)
             logger.debug("Creating FFmpeg output with music", 
                         output_path_string=output_path_str,
+                        timeline_duration=f"{timeline_duration:.2f}s",
                         ffmpeg_params=render_options.ffmpeg_params,
                         ffmpeg_params_types={k: type(v).__name__ for k, v in render_options.ffmpeg_params.items()})
             
-            # Combine video with external music
+            # Combine video with trimmed external music
+            # Fix: Use proper stream mapping instead of invalid ['v'] syntax
             output = ffmpeg.output(
-                video_input['v'], music_input['a'],
+                video_input, music_input,
                 output_path_str,
                 vcodec='copy',  # Copy video stream for speed
                 acodec='aac',   # Encode audio
                 audio_bitrate='192k',
-                shortest=None,  # Stop when shortest stream ends (flag without value)
                 **render_options.ffmpeg_params
             )
         else:

@@ -127,11 +127,26 @@ class EditingTimeline:
     
     @property
     def beat_sync_percentage(self) -> float:
-        """Percentage of cuts that are beat-aligned"""
+        """FIXED: Percentage based on actual beat alignment quality, not artificial assignments"""
         if not self.cut_points:
             return 0.0
-        beat_cuts = sum(1 for cp in self.cut_points if cp.cut_type == CutType.BEAT_CUT)
-        return (beat_cuts / len(self.cut_points)) * 100.0
+        
+        # Calculate weighted beat sync based on actual alignment scores
+        # This replaces the artificial counting with real temporal proximity measurement
+        total_alignment = 0.0
+        beat_cut_count = 0
+        
+        for cp in self.cut_points:
+            if cp.cut_type == CutType.BEAT_CUT:
+                total_alignment += cp.beat_alignment
+                beat_cut_count += 1
+        
+        if beat_cut_count == 0:
+            return 0.0
+        
+        # Average alignment score converted to percentage
+        average_alignment = total_alignment / beat_cut_count
+        return average_alignment * 100.0
     
     @property
     def scene_respect_percentage(self) -> float:
@@ -1483,7 +1498,7 @@ class BeatSyncTimelineGenerator:
             
             # Step 4: Arrange clips to sync with beats
             timeline = self._arrange_clips_to_beats(
-                selected_clips, audio_analysis, editing_style
+                selected_clips, audio_analysis, editing_style, video_info_list
             )
             
             # Step 5: Apply temporal shuffling (avoid consecutive clips from same video)
@@ -1512,12 +1527,20 @@ class BeatSyncTimelineGenerator:
     
     def _extract_video_clips(self, video_info: VideoInfo, scene_detection: SceneDetectionResult, 
                            quality_result, video_index: int) -> List[Dict]:
-        """Extract potential clips from a video with quality information"""
+        """Extract potential clips from a video with quality information - FIXED: Endpoint bias elimination"""
         clips = []
         scenes = scene_detection.scene_changes if scene_detection else []
         
-        # Add video start as first scene if not present
-        scene_times = [0.0] + [sc.timestamp for sc in scenes] + [video_info.duration]
+        # FIXED: Quality-filtered scene boundary creation (eliminates endpoint bias)
+        scene_times = [sc.timestamp for sc in scenes]
+        
+        # Only add start/end if they pass quality threshold (prevents freeze frames)
+        if self._passes_endpoint_quality_check(0.0, video_info, quality_result, min_quality=0.6):
+            scene_times.insert(0, 0.0)
+        
+        if self._passes_endpoint_quality_check(video_info.duration, video_info, quality_result, min_quality=0.6):
+            scene_times.append(video_info.duration)
+        
         scene_times = sorted(set(scene_times))  # Remove duplicates and sort
         
         for i in range(len(scene_times) - 1):
@@ -1554,6 +1577,69 @@ class BeatSyncTimelineGenerator:
             clips.append(clip)
         
         return clips
+    
+    def _passes_endpoint_quality_check(self, timestamp: float, video_info: VideoInfo, 
+                                     quality_result, min_quality: float = 0.6) -> bool:
+        """
+        Check if video endpoint (start/end) passes quality threshold to prevent freeze frames
+        
+        Args:
+            timestamp: Time to check (0.0 for start, video_info.duration for end)
+            video_info: Video information
+            quality_result: Quality analysis results
+            min_quality: Minimum quality threshold (0.6 = 60%)
+            
+        Returns:
+            True if endpoint quality is acceptable, False if it would cause freeze frames
+        """
+        try:
+            # Define endpoint region (first/last 5% of video)
+            endpoint_threshold = video_info.duration * 0.05
+            
+            if timestamp == 0.0:
+                # Check start region (0 to 5% of video)
+                region_start = 0.0
+                region_end = endpoint_threshold
+            elif abs(timestamp - video_info.duration) < 0.1:
+                # Check end region (95% to 100% of video)  
+                region_start = video_info.duration - endpoint_threshold
+                region_end = video_info.duration
+            else:
+                # Not an endpoint, always pass
+                return True
+            
+            # Analyze quality in endpoint region
+            if hasattr(quality_result, 'frame_results'):
+                quality_scores = []
+                for frame_result in quality_result.frame_results:
+                    if region_start <= frame_result.timestamp <= region_end:
+                        quality_scores.append(frame_result.overall_quality)
+                
+                if quality_scores:
+                    # Use median quality to avoid outlier bias
+                    median_quality = sorted(quality_scores)[len(quality_scores) // 2]
+                    normalized_quality = median_quality / 100.0  # Normalize to 0-1
+                    
+                    # Apply stricter threshold for endpoints (higher chance of freeze frames)
+                    endpoint_min_quality = min_quality * 1.2  # 20% stricter
+                    
+                    logger.debug("Endpoint quality check",
+                               timestamp=f"{timestamp:.2f}s",
+                               region_quality=f"{normalized_quality:.3f}",
+                               threshold=f"{endpoint_min_quality:.3f}",
+                               passes=normalized_quality >= endpoint_min_quality)
+                    
+                    return normalized_quality >= endpoint_min_quality
+            
+            # If no quality data available, be conservative (reject endpoints)
+            logger.debug("No quality data for endpoint, rejecting to prevent freeze frames",
+                       timestamp=f"{timestamp:.2f}s")
+            return False
+            
+        except Exception as e:
+            logger.warning("Endpoint quality check failed, rejecting endpoint",
+                         timestamp=f"{timestamp:.2f}s", error=str(e))
+            return False
     
     def _score_multi_video_clips(self, all_clips: List[Dict], quality_results) -> List[Dict]:
         """Score and rank clips from multiple videos"""
@@ -1637,13 +1723,14 @@ class BeatSyncTimelineGenerator:
         return selected_clips
     
     def _arrange_clips_to_beats(self, clips: List[Dict], audio_analysis: AudioAnalysis, 
-                              editing_style: EditingStyle) -> EditingTimeline:
-        """Arrange selected clips to synchronize with music beats"""
+                              editing_style: EditingStyle, video_info_list: Optional[List] = None) -> EditingTimeline:
+        """Arrange selected clips to synchronize with music beats with proper temporal domain separation"""
         beats = audio_analysis.beats
         segments = []
         cut_points = []
         
-        current_time = 0.0
+        # TIMELINE DOMAIN: Accumulates the final output timeline position
+        timeline_position = 0.0
         clip_index = 0
         
         for i, beat_time in enumerate(beats):
@@ -1652,56 +1739,197 @@ class BeatSyncTimelineGenerator:
                 
             clip = clips[clip_index]
             
-            # Calculate clip duration to next beat (or end)
+            # BEAT DOMAIN: Calculate available duration from beat intervals
             next_beat_time = beats[i + 1] if i + 1 < len(beats) else audio_analysis.duration
-            available_duration = next_beat_time - beat_time
+            beat_interval_duration = next_beat_time - beat_time
             
-            # Adjust clip duration to fit beat interval
-            actual_duration = min(clip['duration'], available_duration)
+            # SOURCE DOMAIN: Get source video constraints
+            source_video_index = clip.get('source_video_index', 0)
+            source_start_time = clip['start_time']  # Original video timestamp
+            
+            # Calculate maximum available duration from source video
+            if video_info_list and source_video_index < len(video_info_list):
+                source_video_duration = video_info_list[source_video_index].duration
+                max_source_duration = source_video_duration - source_start_time
+            else:
+                # Fallback: use clip's original duration
+                max_source_duration = clip['duration']
+            
+            # Calculate actual duration respecting all domains
+            actual_duration = min(
+                clip['duration'],           # Original clip duration
+                beat_interval_duration,     # Available beat interval
+                max_source_duration        # Source video bounds
+            )
             actual_duration = max(actual_duration, self.min_clip_duration)
             
-            # Create timeline segment
+            # SOURCE DOMAIN: Calculate proper source end time
+            source_end_time = source_start_time + actual_duration
+            
+            # Validate segment before creation
+            if not self._validate_timeline_segment_bounds(
+                source_start_time, source_end_time, actual_duration, 
+                video_info_list, source_video_index):
+                logger.warning(f"Invalid segment detected, skipping clip {clip_index}")
+                clip_index += 1
+                continue
+            
+            # TIMELINE DOMAIN: Create timeline segment
             segment = TimelineSegment(
-                start_time=current_time,
-                end_time=current_time + actual_duration,
-                source_video_index=clip['source_video_index'],
+                start_time=timeline_position,
+                end_time=timeline_position + actual_duration,
+                source_video_index=source_video_index,
                 source_video_path=clip['source_video_path'],
-                source_start_time=clip['start_time'],
-                source_end_time=clip['start_time'] + actual_duration,
+                source_start_time=source_start_time,  # Pure source domain
+                source_end_time=source_end_time,      # Pure source domain  
                 quality_score=clip['quality_score'],
                 beat_alignment_score=1.0,  # Perfect beat alignment
                 scene_respect_score=1.0 if clip['is_scene_boundary'] else 0.8
             )
             segments.append(segment)
             
-            # Create cut point
+            # Create cut point using BEAT DOMAIN timestamp
             if i > 0:  # Skip first cut point
+                # FIXED: Calculate actual beat alignment based on temporal proximity
+                actual_beat_alignment = self._calculate_actual_beat_alignment(
+                    beat_time, timeline_position, audio_analysis.beats, i
+                )
+                
                 cut_point = CutPoint(
-                    timestamp=current_time,
+                    timestamp=beat_time,  # Use beat time, not timeline position
                     cut_type=CutType.BEAT_CUT,
                     confidence=0.9,
-                    beat_alignment=1.0,
+                    beat_alignment=actual_beat_alignment,  # Use calculated alignment, not hardcoded 1.0
                     scene_compatibility=segment.scene_respect_score,
                     flow_score=0.8
                 )
                 cut_points.append(cut_point)
             
-            current_time += actual_duration
+            # TIMELINE DOMAIN: Advance timeline position
+            timeline_position += actual_duration
             clip_index += 1
             
             # Stop if we've used all available music duration
-            if current_time >= audio_analysis.duration:
+            if timeline_position >= audio_analysis.duration:
                 break
         
         # Create timeline
         timeline = EditingTimeline(
             segments=segments,
             cut_points=cut_points,
-            duration=current_time,
+            duration=timeline_position,  # Use timeline domain accumulator
             editing_style=editing_style
         )
         
         return timeline
+    
+    def _validate_timeline_segment_bounds(self, source_start_time: float, source_end_time: float, 
+                                        duration: float, video_info_list: Optional[List], 
+                                        source_video_index: int) -> bool:
+        """
+        Validate timeline segment bounds across all temporal domains
+        
+        Args:
+            source_start_time: Start time in source video domain
+            source_end_time: End time in source video domain  
+            duration: Segment duration
+            video_info_list: List of video info objects
+            source_video_index: Index of source video
+            
+        Returns:
+            bool: True if segment is valid, False otherwise
+        """
+        # Basic temporal consistency checks
+        if source_start_time < 0:
+            logger.warning(f"Invalid source_start_time: {source_start_time} < 0")
+            return False
+        
+        if source_start_time >= source_end_time:
+            logger.warning(f"Invalid time range: start({source_start_time}) >= end({source_end_time})")
+            return False
+        
+        if duration <= 0:
+            logger.warning(f"Invalid duration: {duration} <= 0")
+            return False
+        
+        # Source video bounds validation
+        if video_info_list and source_video_index < len(video_info_list):
+            video_info = video_info_list[source_video_index]
+            video_duration = video_info.duration
+            
+            if source_end_time > video_duration:
+                logger.warning(f"Segment exceeds video duration: end({source_end_time}) > video_duration({video_duration})")
+                return False
+                
+            if source_start_time >= video_duration:
+                logger.warning(f"Segment starts beyond video: start({source_start_time}) >= video_duration({video_duration})")
+                return False
+        
+        # Duration consistency validation
+        calculated_duration = source_end_time - source_start_time
+        if abs(calculated_duration - duration) > 0.001:  # Allow small floating point errors
+            logger.warning(f"Duration mismatch: calculated({calculated_duration}) != provided({duration})")
+            return False
+        
+        return True
+    
+    def _calculate_actual_beat_alignment(self, beat_time: float, timeline_position: float, 
+                                       beats: List[float], beat_index: int) -> float:
+        """
+        Calculate actual beat alignment based on temporal proximity
+        
+        This replaces the artificial beat_alignment=1.0 with a real calculation
+        based on how close the cut actually is to the intended beat.
+        
+        Args:
+            beat_time: The intended beat timestamp 
+            timeline_position: The actual timeline position where cut occurs
+            beats: List of all beat timestamps
+            beat_index: Index of current beat in the beats list
+            
+        Returns:
+            Float between 0.0 and 1.0 representing actual beat alignment
+        """
+        try:
+            # Calculate temporal distance between intended beat and actual cut position
+            time_difference = abs(beat_time - timeline_position)
+            
+            # Calculate beat interval for normalization
+            if beat_index < len(beats) - 1:
+                beat_interval = beats[beat_index + 1] - beats[beat_index]
+            elif beat_index > 0:
+                beat_interval = beats[beat_index] - beats[beat_index - 1]
+            else:
+                beat_interval = 0.5  # Default fallback interval
+            
+            # Normalize time difference by beat interval
+            # Perfect alignment (0 difference) = 1.0
+            # Half beat interval difference = 0.5
+            # Full beat interval difference = 0.0
+            if beat_interval > 0:
+                normalized_difference = time_difference / beat_interval
+                alignment_score = max(0.0, 1.0 - normalized_difference)
+            else:
+                alignment_score = 1.0  # Fallback for edge cases
+            
+            # Apply stricter thresholds for beat alignment
+            # Only consider well-aligned cuts as truly beat-synced
+            if time_difference > beat_interval * 0.25:  # More than 25% of beat interval off
+                alignment_score *= 0.5  # Penalize poor alignment
+            
+            logger.debug("Beat alignment calculated",
+                        beat_time=f"{beat_time:.3f}s",
+                        timeline_position=f"{timeline_position:.3f}s", 
+                        time_difference=f"{time_difference:.3f}s",
+                        beat_interval=f"{beat_interval:.3f}s",
+                        alignment_score=f"{alignment_score:.3f}")
+            
+            return alignment_score
+            
+        except Exception as e:
+            logger.warning("Beat alignment calculation failed, using default",
+                         error=str(e))
+            return 0.5  # Conservative default
     
     def _apply_temporal_shuffling(self, timeline: EditingTimeline) -> EditingTimeline:
         """Apply temporal shuffling to avoid consecutive clips from same video"""

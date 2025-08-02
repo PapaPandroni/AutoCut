@@ -1273,7 +1273,11 @@ def print_pipeline_results(results: Dict[str, Any]):
         print(f"  HW Accel:    {render_info['hardware_acceleration']}")
     elif 'video_info_list' in results:
         print(f"\nVideo Rendering:")
-        print(f"  Multi-video processing - no final rendering performed")
+        if results.get('output_path'):
+            print(f"  Multi-video rendering completed")
+            print(f"  Output: {results['output_path']}")
+        else:
+            print(f"  Multi-video processing - no final rendering performed")
     
     # Processing statistics
     if 'video_info' in results:
