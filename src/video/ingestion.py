@@ -577,7 +577,33 @@ class VideoIngestion:
             output_stream = ffmpeg.output(input_stream, str(output_path), 
                                         vframes=1, format='image2')
             
-            ffmpeg.run(output_stream, quiet=True, overwrite_output=True)
+            # Extract FFmpeg command and add -y flag manually to avoid ffmpeg-python parameter issues
+            cmd_args = output_stream.compile()
+            
+            # Insert -y flag after 'ffmpeg' for overwrite behavior
+            if len(cmd_args) > 0 and cmd_args[0] == 'ffmpeg':
+                final_cmd = ['ffmpeg', '-y'] + cmd_args[1:]
+            else:
+                final_cmd = cmd_args
+                if '-y' not in final_cmd:
+                    final_cmd.insert(1, '-y')  # Insert after first element
+            
+            # Execute FFmpeg via subprocess for precise control
+            result = subprocess.run(
+                final_cmd,
+                capture_output=True,
+                text=True,
+                check=False  # We'll handle errors manually
+            )
+            
+            # Check if subprocess execution failed
+            if result.returncode != 0:
+                logger.error("FFmpeg frame extraction failed", 
+                           timestamp=timestamp,
+                           output_path=str(output_path),
+                           return_code=result.returncode,
+                           stderr=result.stderr)
+                return False
             
             logger.debug("Frame extracted", 
                         timestamp=timestamp,

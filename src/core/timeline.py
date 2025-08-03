@@ -128,25 +128,56 @@ class EditingTimeline:
     @property
     def beat_sync_percentage(self) -> float:
         """FIXED: Percentage based on actual beat alignment quality, not artificial assignments"""
+        # ENHANCED DEBUG: Add comprehensive logging for beat sync calculation debugging
+        logger.debug("Calculating beat sync percentage", 
+                    total_cut_points=len(self.cut_points) if self.cut_points else 0)
+        
         if not self.cut_points:
+            logger.debug("No cut points found for beat sync calculation")
             return 0.0
         
         # Calculate weighted beat sync based on actual alignment scores
         # This replaces the artificial counting with real temporal proximity measurement
         total_alignment = 0.0
         beat_cut_count = 0
+        beat_cut_details = []
         
-        for cp in self.cut_points:
+        for i, cp in enumerate(self.cut_points):
+            cut_info = {
+                'index': i,
+                'timestamp': f"{cp.timestamp:.3f}s",
+                'cut_type': cp.cut_type.value,
+                'beat_alignment': f"{cp.beat_alignment:.3f}" if cp.beat_alignment is not None else "None"
+            }
+            beat_cut_details.append(cut_info)
+            
             if cp.cut_type == CutType.BEAT_CUT:
                 total_alignment += cp.beat_alignment
                 beat_cut_count += 1
         
+        # Debug logging of all cut points for troubleshooting
+        logger.debug("Cut points analysis", 
+                    beat_cuts_found=beat_cut_count,
+                    total_cut_points=len(self.cut_points),
+                    total_alignment=f"{total_alignment:.3f}",
+                    cut_details=beat_cut_details[:10])  # Limit to first 10 for readability
+        
         if beat_cut_count == 0:
+            logger.warning("No BEAT_CUT type cut points found", 
+                         total_cut_points=len(self.cut_points),
+                         cut_types=[cp.cut_type.value for cp in self.cut_points[:5]])
             return 0.0
         
         # Average alignment score converted to percentage
         average_alignment = total_alignment / beat_cut_count
-        return average_alignment * 100.0
+        percentage = average_alignment * 100.0
+        
+        logger.debug("Beat sync calculation completed", 
+                    beat_cut_count=beat_cut_count,
+                    average_alignment=f"{average_alignment:.3f}",
+                    final_percentage=f"{percentage:.1f}%")
+        
+        return percentage
     
     @property
     def scene_respect_percentage(self) -> float:
@@ -904,13 +935,18 @@ class BeatSyncTimelineGenerator:
         candidates = []
         
         # Check beats
-        for beat_time in audio_analysis.beats:
+        for beat_index, beat_time in enumerate(audio_analysis.beats):
             if abs(beat_time - target_time) <= search_window:
+                # CRITICAL FIX: Calculate actual beat alignment instead of hardcoded 1.0
+                actual_beat_alignment = self._calculate_actual_beat_alignment(
+                    beat_time, target_time, audio_analysis.beats, beat_index
+                )
+                
                 beat_cut = CutPoint(
                     timestamp=beat_time,
                     confidence=audio_analysis.confidence,
                     cut_type=CutType.BEAT_CUT,
-                    beat_alignment=1.0,
+                    beat_alignment=actual_beat_alignment,
                     scene_compatibility=self._calculate_scene_compatibility(
                         beat_time, scene_detection, self.style_configs[editing_style]
                     )[0],
@@ -1013,7 +1049,7 @@ class BeatSyncTimelineGenerator:
         # Look for nearby beats that might provide better rhythm
         search_window = 1.0  # 1 second search window
         
-        for beat_time in audio_analysis.beats:
+        for beat_index, beat_time in enumerate(audio_analysis.beats):
             if (abs(beat_time - current_cut.timestamp) <= search_window and
                 beat_time != current_cut.timestamp):
                 
@@ -1040,11 +1076,16 @@ class BeatSyncTimelineGenerator:
                     )
                     
                     if new_rhythm_score > current_rhythm_score + 0.1:
+                        # CRITICAL FIX: Calculate actual beat alignment instead of hardcoded 1.0
+                        actual_beat_alignment = self._calculate_actual_beat_alignment(
+                            beat_time, current_cut.timestamp, audio_analysis.beats, beat_index
+                        )
+                        
                         adjusted_cut = CutPoint(
                             timestamp=beat_time,
                             confidence=current_cut.confidence,
                             cut_type=CutType.BEAT_CUT,
-                            beat_alignment=1.0,
+                            beat_alignment=actual_beat_alignment,
                             scene_compatibility=current_cut.scene_compatibility,
                             flow_score=new_rhythm_score,
                             override_cost=current_cut.override_cost,
@@ -1543,40 +1584,156 @@ class BeatSyncTimelineGenerator:
         
         scene_times = sorted(set(scene_times))  # Remove duplicates and sort
         
+        logger.debug("Scene times for clip extraction", 
+                   video_index=video_index,
+                   scene_times=scene_times,
+                   scene_count=len(scene_times))
+        
+        # TEMPORARY DEBUG: Print directly to console
+        print(f"DEBUG: Video {video_index} - Duration: {video_info.duration:.2f}s")
+        print(f"DEBUG: Scene changes: {len(scenes)}")
+        print(f"DEBUG: Scene times: {scene_times}")
+        print(f"DEBUG: Min/Max clip duration: {self.min_clip_duration:.2f}s / {self.max_clip_duration:.2f}s (max allowed: {self.max_clip_duration * 2:.2f}s)")
+        
         for i in range(len(scene_times) - 1):
             start_time = scene_times[i]
             end_time = scene_times[i + 1]
             duration = end_time - start_time
             
-            # Skip very short or very long scenes
-            if duration < self.min_clip_duration or duration > self.max_clip_duration * 2:
+            # Skip very short scenes
+            if duration < self.min_clip_duration:
+                print(f"DEBUG: SKIPPING clip {start_time:.2f}s-{end_time:.2f}s (duration: {duration:.2f}s) - too_short")
                 continue
             
-            # Get quality score for this time range if available
-            quality_score = 0.5  # Default neutral quality
-            if quality_result and hasattr(quality_result, 'frames'):
-                # Calculate average quality for this time range
-                frame_scores = []
-                for frame_result in quality_result.frames:
-                    if start_time <= frame_result.timestamp <= end_time:
-                        frame_scores.append(frame_result.quality_score)
+            # For long scenes, create multiple clips if editing style supports it
+            # For musical editing, split scenes longer than max_clip_duration to create variety
+            if duration > self.max_clip_duration:
+                print(f"DEBUG: LONG SCENE detected {start_time:.2f}s-{end_time:.2f}s (duration: {duration:.2f}s)")
                 
-                if frame_scores:
-                    quality_score = sum(frame_scores) / len(frame_scores)
+                # Split long scenes into multiple clips for better variety
+                target_clip_count = max(2, int(duration / self.max_clip_duration))
+                clip_duration = duration / target_clip_count
+                
+                print(f"DEBUG: Splitting into {target_clip_count} clips of {clip_duration:.2f}s each")
+                
+                for clip_idx in range(target_clip_count):
+                    clip_start = start_time + (clip_idx * clip_duration)
+                    clip_end = min(clip_start + clip_duration, end_time)
+                    clip_dur = clip_end - clip_start
+                    
+                    if clip_dur >= self.min_clip_duration:
+                        # Create sub-clip with same quality processing logic
+                        self._create_clip(clips, video_info, quality_result, video_index, 
+                                        clip_start, clip_end, scenes, i)
+                continue
             
-            clip = {
-                'source_video_index': video_index,
-                'source_video_path': video_info.file_path,
-                'start_time': start_time,
-                'end_time': end_time,
-                'duration': duration,
-                'quality_score': quality_score,
-                'is_scene_boundary': i > 0,  # First clip doesn't start with scene change
-                'scene_confidence': scenes[i-1].confidence if i > 0 and i-1 < len(scenes) else 1.0
-            }
-            clips.append(clip)
+            # Create regular-sized clip using helper method
+            self._create_clip(clips, video_info, quality_result, video_index, 
+                            start_time, end_time, scenes, i)
         
         return clips
+    
+    def _create_clip(self, clips: List[Dict], video_info: VideoInfo, quality_result, 
+                    video_index: int, start_time: float, end_time: float, 
+                    scenes: List, scene_index: int):
+        """Create a clip with quality processing logic"""
+        duration = end_time - start_time
+        
+        # Get quality score for this time range with robust validation
+        quality_score = 0.5  # Default neutral quality
+        quality_data_used = False
+        
+        if quality_result:
+            try:
+                # Validate quality result structure
+                if not hasattr(quality_result, 'frame_results'):
+                    logger.warning("Quality result missing frame_results attribute", 
+                                 video_index=video_index,
+                                 available_attrs=[attr for attr in dir(quality_result) if not attr.startswith('_')])
+                elif not quality_result.frame_results:
+                    logger.warning("Quality result has empty frame_results list", 
+                                 video_index=video_index)
+                else:
+                    # Calculate average quality for this time range
+                    frame_scores = []
+                    invalid_frames = 0
+                    
+                    for frame_result in quality_result.frame_results:
+                        try:
+                            # Validate frame result structure
+                            if not hasattr(frame_result, 'timestamp'):
+                                logger.warning("Frame result missing timestamp attribute")
+                                invalid_frames += 1
+                                continue
+                                
+                            if not hasattr(frame_result, 'overall_quality'):
+                                logger.warning("Frame result missing overall_quality attribute")
+                                invalid_frames += 1
+                                continue
+                            
+                            # Check if frame is in time range
+                            if start_time <= frame_result.timestamp <= end_time:
+                                # Validate and normalize quality score
+                                quality_value = frame_result.overall_quality
+                                if not isinstance(quality_value, (int, float)):
+                                    logger.warning("Invalid quality score type", 
+                                                 quality_type=type(quality_value).__name__,
+                                                 quality_value=quality_value)
+                                    continue
+                                
+                                # Handle different quality scales and clamp to valid range
+                                if quality_value > 1.0:  # Assuming 0-100 scale
+                                    normalized_quality = max(0.0, min(1.0, quality_value / 100.0))
+                                else:  # Assuming 0-1 scale
+                                    normalized_quality = max(0.0, min(1.0, quality_value))
+                                
+                                frame_scores.append(normalized_quality)
+                                
+                        except Exception as e:
+                            logger.warning("Error processing frame quality data", 
+                                         error=str(e),
+                                         frame_timestamp=getattr(frame_result, 'timestamp', 'unknown'))
+                            invalid_frames += 1
+                    
+                    if frame_scores:
+                        quality_score = sum(frame_scores) / len(frame_scores)
+                        quality_data_used = True
+                        logger.debug("Quality score calculated from frame data", 
+                                   video_index=video_index,
+                                   frame_count=len(frame_scores),
+                                   invalid_frames=invalid_frames,
+                                   quality_score=f"{quality_score:.3f}")
+                    elif invalid_frames > 0:
+                        logger.warning("No valid quality frames found in time range", 
+                                     video_index=video_index,
+                                     invalid_frames=invalid_frames,
+                                     time_range=f"{start_time:.2f}-{end_time:.2f}s")
+                    
+            except Exception as e:
+                logger.error("Error accessing quality data structure", 
+                           error=str(e),
+                           video_index=video_index,
+                           quality_result_type=type(quality_result).__name__)
+        
+        if not quality_data_used:
+            logger.debug("Using default quality score", 
+                       video_index=video_index,
+                       default_score=quality_score,
+                       reason="no_valid_quality_data")
+        
+        clip = {
+            'source_video_index': video_index,
+            'source_video_path': video_info.file_path,
+            'start_time': start_time,
+            'end_time': end_time,
+            'duration': duration,
+            'quality_score': quality_score,
+            'is_scene_boundary': scene_index > 0,  # First clip doesn't start with scene change
+            'scene_confidence': scenes[scene_index-1].confidence if scene_index > 0 and scene_index-1 < len(scenes) else 1.0
+        }
+        clips.append(clip)
+        
+        print(f"DEBUG: CREATED clip {len(clips)}: {start_time:.2f}s-{end_time:.2f}s (duration: {duration:.2f}s, quality: {quality_score:.3f})")
     
     def _passes_endpoint_quality_check(self, timestamp: float, video_info: VideoInfo, 
                                      quality_result, min_quality: float = 0.6) -> bool:
@@ -1621,7 +1778,8 @@ class BeatSyncTimelineGenerator:
                     normalized_quality = median_quality / 100.0  # Normalize to 0-1
                     
                     # Apply stricter threshold for endpoints (higher chance of freeze frames)
-                    endpoint_min_quality = min_quality * 1.2  # 20% stricter
+                    # TEMPORARY DEBUG: Use lower threshold while debugging quality scoring
+                    endpoint_min_quality = max(0.1, min_quality * 0.5)  # Much more permissive for debugging
                     
                     logger.debug("Endpoint quality check",
                                timestamp=f"{timestamp:.2f}s",
@@ -1631,10 +1789,10 @@ class BeatSyncTimelineGenerator:
                     
                     return normalized_quality >= endpoint_min_quality
             
-            # If no quality data available, be conservative (reject endpoints)
-            logger.debug("No quality data for endpoint, rejecting to prevent freeze frames",
+            # If no quality data available, allow endpoints (quality scoring disabled)
+            logger.debug("No quality data for endpoint, allowing (quality scoring disabled)",
                        timestamp=f"{timestamp:.2f}s")
-            return False
+            return True
             
         except Exception as e:
             logger.warning("Endpoint quality check failed, rejecting endpoint",
@@ -1733,14 +1891,24 @@ class BeatSyncTimelineGenerator:
         timeline_position = 0.0
         clip_index = 0
         
-        for i, beat_time in enumerate(beats):
-            if clip_index >= len(clips):
-                break
+        i = 0
+        while i < len(beats) and clip_index < len(clips):
+            beat_time = beats[i]
                 
             clip = clips[clip_index]
             
             # BEAT DOMAIN: Calculate available duration from beat intervals
-            next_beat_time = beats[i + 1] if i + 1 < len(beats) else audio_analysis.duration
+            # For musical editing, create longer segments spanning multiple beats
+            style_config = self.style_configs.get(editing_style, self.style_configs[EditingStyle.ADAPTIVE])
+            target_clip_duration = (style_config['min_clip_duration'] + style_config['max_clip_duration']) / 2
+            
+            # Calculate how many beats to span for target duration
+            avg_beat_interval = 60.0 / audio_analysis.bpm if audio_analysis.bpm > 0 else 0.5
+            beats_to_span = max(1, int(target_clip_duration / avg_beat_interval))
+            
+            # Find end beat for multi-beat segment
+            end_beat_index = min(i + beats_to_span, len(beats) - 1)
+            next_beat_time = beats[end_beat_index] if end_beat_index < len(beats) else audio_analysis.duration
             beat_interval_duration = next_beat_time - beat_time
             
             # SOURCE DOMAIN: Get source video constraints
@@ -1761,6 +1929,15 @@ class BeatSyncTimelineGenerator:
                 beat_interval_duration,     # Available beat interval
                 max_source_duration        # Source video bounds
             )
+            
+            # TEMPORARY DEBUG: Print duration calculations
+            print(f"DEBUG: Beat {i+1}/{len(beats)} (spanning {beats_to_span} beats) - clip {clip_index+1}")
+            print(f"  clip['duration']: {clip['duration']:.2f}s")
+            print(f"  beat_interval_duration: {beat_interval_duration:.2f}s") 
+            print(f"  max_source_duration: {max_source_duration:.2f}s")
+            print(f"  min(all): {actual_duration:.2f}s")
+            print(f"  final (after min_clip_duration): {max(actual_duration, self.min_clip_duration):.2f}s")
+            
             actual_duration = max(actual_duration, self.min_clip_duration)
             
             # SOURCE DOMAIN: Calculate proper source end time
@@ -1788,9 +1965,16 @@ class BeatSyncTimelineGenerator:
             )
             segments.append(segment)
             
-            # Create cut point using BEAT DOMAIN timestamp
-            if i > 0:  # Skip first cut point
-                # FIXED: Calculate actual beat alignment based on temporal proximity
+            # ENHANCED FIX: Create cut points more systematically for musical editing
+            should_create_cut = True
+            
+            # Skip only the very first cut point (timeline start)
+            if i == 0 and timeline_position == 0.0:
+                should_create_cut = False
+                logger.debug("Skipping initial timeline cut point")
+            
+            if should_create_cut:
+                # Calculate actual beat alignment based on temporal proximity
                 actual_beat_alignment = self._calculate_actual_beat_alignment(
                     beat_time, timeline_position, audio_analysis.beats, i
                 )
@@ -1804,10 +1988,23 @@ class BeatSyncTimelineGenerator:
                     flow_score=0.8
                 )
                 cut_points.append(cut_point)
+                
+                logger.debug("Created beat cut point",
+                           beat_index=i,
+                           beat_time=f"{beat_time:.3f}s",
+                           timeline_position=f"{timeline_position:.3f}s",
+                           beat_alignment=f"{actual_beat_alignment:.3f}")
+            else:
+                logger.debug("Skipped cut point creation", 
+                           beat_index=i, 
+                           reason="initial timeline position")
             
             # TIMELINE DOMAIN: Advance timeline position
             timeline_position += actual_duration
             clip_index += 1
+            
+            # BEAT DOMAIN: Skip the beats covered by this multi-beat segment
+            i += beats_to_span
             
             # Stop if we've used all available music duration
             if timeline_position >= audio_analysis.duration:

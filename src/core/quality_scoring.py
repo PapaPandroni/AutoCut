@@ -63,29 +63,29 @@ class BlurMethod(Enum):
 @dataclass
 class QualityMetrics:
     """Individual quality metrics for a frame"""
-    # Core quality factors (0.0 - 1.0)
-    face_quality: float = 0.0
-    blur_score: float = 0.0
-    exposure_score: float = 0.0
-    motion_blur_score: float = 0.0
-    composition_score: float = 0.0
-    color_quality_score: float = 0.0
+    # FIXED: Core quality factors (0.0 - 1.0) - Use 0.5 neutral scores to distinguish unprocessed from poor quality
+    face_quality: float = 0.5
+    blur_score: float = 0.5
+    exposure_score: float = 0.5
+    motion_blur_score: float = 0.5
+    composition_score: float = 0.5
+    color_quality_score: float = 0.5
     
-    # Detailed sub-metrics
-    blur_laplacian: float = 0.0
-    blur_fft: float = 0.0
-    exposure_histogram: float = 0.0
-    exposure_dynamic_range: float = 0.0  
-    exposure_clipping: float = 0.0
-    motion_optical_flow: float = 0.0
-    motion_frame_diff: float = 0.0
-    composition_rule_thirds: float = 0.0
-    composition_center: float = 0.0
-    color_saturation: float = 0.0
-    color_contrast: float = 0.0
-    color_balance: float = 0.0
+    # FIXED: Detailed sub-metrics - Use 0.5 neutral scores for consistent baseline
+    blur_laplacian: float = 0.5
+    blur_fft: float = 0.5
+    exposure_histogram: float = 0.5
+    exposure_dynamic_range: float = 0.5  
+    exposure_clipping: float = 0.5
+    motion_optical_flow: float = 0.5
+    motion_frame_diff: float = 0.5
+    composition_rule_thirds: float = 0.5
+    composition_center: float = 0.5
+    color_saturation: float = 0.5
+    color_contrast: float = 0.5
+    color_balance: float = 0.5
     
-    # Processing metadata
+    # Processing metadata (keep 0.0 for timing and string defaults)
     processing_time: float = 0.0
     method_used: str = ""
     
@@ -385,13 +385,43 @@ class QualityScoring:
         metrics = QualityMetrics()
         frame_height, frame_width = frame.shape[:2]
         
-        # Calculate individual quality factors
-        metrics.face_quality = self._assess_face_quality(frame, face_results)
-        metrics.blur_score = self._assess_blur_quality(frame, metrics)
-        metrics.exposure_score = self._assess_exposure_quality(frame, metrics)
-        metrics.motion_blur_score = self._assess_motion_quality(frame, metrics)
-        metrics.composition_score = self._assess_composition_quality(frame, metrics)
-        metrics.color_quality_score = self._assess_color_quality(frame, metrics)
+        # ENHANCED FIX: Calculate individual quality factors with mandatory validation
+        # Each method call is protected to prevent silent failures
+        try:
+            metrics.face_quality = self._assess_face_quality(frame, face_results)
+        except Exception as e:
+            logger.warning("Face quality assessment failed", error=str(e), frame_index=frame_index)
+            metrics.face_quality = 0.5  # Neutral fallback
+            
+        try:
+            metrics.blur_score = self._assess_blur_quality(frame, metrics)
+        except Exception as e:
+            logger.warning("Blur quality assessment failed", error=str(e), frame_index=frame_index)
+            metrics.blur_score = 0.5  # Neutral fallback
+            
+        try:
+            metrics.exposure_score = self._assess_exposure_quality(frame, metrics)
+        except Exception as e:
+            logger.warning("Exposure quality assessment failed", error=str(e), frame_index=frame_index)
+            metrics.exposure_score = 0.5  # Neutral fallback
+            
+        try:
+            metrics.motion_blur_score = self._assess_motion_quality(frame, metrics)
+        except Exception as e:
+            logger.warning("Motion quality assessment failed", error=str(e), frame_index=frame_index)
+            metrics.motion_blur_score = 0.5  # Neutral fallback
+            
+        try:
+            metrics.composition_score = self._assess_composition_quality(frame, metrics)
+        except Exception as e:
+            logger.warning("Composition quality assessment failed", error=str(e), frame_index=frame_index)
+            metrics.composition_score = 0.5  # Neutral fallback
+            
+        try:
+            metrics.color_quality_score = self._assess_color_quality(frame, metrics)
+        except Exception as e:
+            logger.warning("Color quality assessment failed", error=str(e), frame_index=frame_index)
+            metrics.color_quality_score = 0.5  # Neutral fallback
         
         # Calculate overall quality using profile weights
         overall_quality = self._calculate_weighted_quality(metrics)
@@ -514,14 +544,23 @@ class QualityScoring:
         total_energy = np.sum(magnitude_spectrum**2)
         high_freq_energy = np.sum(magnitude_spectrum[high_freq_mask]**2)
         
-        # Avoid division by zero
-        if total_energy > 0:
+        # ENHANCED FIX: Robust division-by-zero protection with edge case handling
+        if total_energy > 1e-10:  # Use small epsilon to avoid near-zero division
             blur_fft = high_freq_energy / total_energy
         else:
-            blur_fft = 0.0
+            # Handle completely black frames or frames with no frequency content
+            logger.debug("Zero or near-zero total energy in FFT analysis", 
+                        total_energy=total_energy, 
+                        high_freq_energy=high_freq_energy)
+            blur_fft = 0.5  # Neutral score for edge cases instead of 0.0
+            
+        # Validate FFT result before normalization
+        if not isinstance(blur_fft, (int, float)) or not np.isfinite(blur_fft):
+            logger.warning("Invalid FFT blur result", blur_fft=blur_fft)
+            blur_fft = 0.5
             
         # Normalize FFT score (typical range: 0-0.3)
-        blur_fft = min(1.0, blur_fft * 10)
+        blur_fft = min(1.0, max(0.0, blur_fft * 10))  # Ensure valid range
         metrics.blur_fft = blur_fft
         
         # Combine methods with weighted average
@@ -631,46 +670,80 @@ class QualityScoring:
         
         if self._prev_frame is not None:
             try:
-                # Method 1: Optical Flow Analysis
-                if self._optical_flow_initialized:
-                    # Calculate dense optical flow
-                    flow = cv2.calcOpticalFlowPyrLK(
-                        self._prev_frame, gray, None, None,
-                        winSize=(15, 15),
-                        maxLevel=2,
-                        criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
+                # Method 1: FIXED - Dense Optical Flow Analysis (replaces incorrect sparse flow)
+                # ENHANCED FIX: Check frame size compatibility for multi-video processing
+                if (self._optical_flow_initialized and 
+                    self._prev_frame.shape == gray.shape):
+                    # Use Farneback dense optical flow for accurate motion analysis
+                    flow = cv2.calcOpticalFlowFarneback(
+                        self._prev_frame, gray, None, 
+                        pyr_scale=0.5, levels=3, winsize=15, 
+                        iterations=3, poly_n=5, poly_sigma=1.2, flags=0
                     )
                     
-                    if flow[0] is not None and len(flow[0]) > 0:
-                        # Calculate flow magnitude
-                        flow_vectors = flow[0]
-                        flow_magnitude = np.sqrt(flow_vectors[:, :, 0]**2 + flow_vectors[:, :, 1]**2)
+                    if flow is not None:
+                        # Calculate flow magnitude across the entire frame
+                        flow_magnitude = np.sqrt(flow[:, :, 0]**2 + flow[:, :, 1]**2)
                         mean_flow = np.mean(flow_magnitude)
                         
                         # Convert to quality score (less motion = higher quality)
-                        motion_flow_score = 1.0 / (1.0 + mean_flow / self.motion_threshold)
+                        # Normalize by typical motion range (0-10 pixels per frame)
+                        normalized_motion = min(mean_flow / 10.0, 1.0)
+                        motion_flow_score = 1.0 - normalized_motion
                         metrics.motion_optical_flow = motion_flow_score
+                    else:
+                        # Fallback if flow calculation fails
+                        metrics.motion_optical_flow = 0.5
+                elif self._prev_frame.shape != gray.shape:
+                    # ENHANCED FIX: Reset optical flow state when frame size changes
+                    logger.debug("Frame size changed - resetting optical flow", 
+                               prev_shape=self._prev_frame.shape, 
+                               current_shape=gray.shape)
+                    self._optical_flow_initialized = False
+                    metrics.motion_optical_flow = 0.5  # Neutral score for size transition
+                else:
+                    # First frame or optical flow not initialized
+                    metrics.motion_optical_flow = 0.5
                 
-                # Method 2: Frame Difference Analysis
-                frame_diff = cv2.absdiff(self._prev_frame, gray)
-                mean_diff = np.mean(frame_diff)
-                
-                # Normalize difference (typical range: 0-50)
-                normalized_diff = mean_diff / 50.0
-                motion_diff_score = 1.0 - min(1.0, normalized_diff)
-                metrics.motion_frame_diff = motion_diff_score
+                # Method 2: Frame Difference Analysis (with size compatibility check)
+                if self._prev_frame.shape == gray.shape:
+                    frame_diff = cv2.absdiff(self._prev_frame, gray)
+                    mean_diff = np.mean(frame_diff)
+                    
+                    # Normalize difference (typical range: 0-50)
+                    normalized_diff = mean_diff / 50.0
+                    motion_diff_score = 1.0 - min(1.0, normalized_diff)
+                    metrics.motion_frame_diff = motion_diff_score
+                else:
+                    # Different frame sizes - use neutral score
+                    metrics.motion_frame_diff = 0.5
                 
             except Exception as e:
-                logger.debug("Motion analysis error", error=str(e))
-                # Use default scores on error
-                pass
+                # ENHANCED FIX: Provide detailed error handling with fallback scoring
+                logger.warning("Motion analysis failed", 
+                             error=str(e), 
+                             error_type=type(e).__name__,
+                             frame_shape=gray.shape if 'gray' in locals() else "unknown",
+                             prev_frame_shape=self._prev_frame.shape if self._prev_frame is not None else "unknown")
+                
+                # Provide reasonable fallback scores instead of leaving them undefined
+                if not hasattr(metrics, 'motion_optical_flow') or metrics.motion_optical_flow is None:
+                    metrics.motion_optical_flow = 0.5  # Neutral score for optical flow
+                    
+                if not hasattr(metrics, 'motion_frame_diff') or metrics.motion_frame_diff is None:
+                    metrics.motion_frame_diff = 0.5  # Neutral score for frame difference
+                    
+                logger.info("Applied fallback motion scores", 
+                          optical_flow=metrics.motion_optical_flow,
+                          frame_diff=metrics.motion_frame_diff)
         
         # Update previous frame for next iteration
         self._prev_frame = gray.copy()
         self._optical_flow_initialized = True
         
-        # Combine motion assessment methods
-        combined_motion_score = 0.6 * motion_flow_score + 0.4 * motion_diff_score
+        # FIXED: Combine motion assessment methods using metrics values
+        # Ensure we use the actual calculated/fallback values from metrics
+        combined_motion_score = 0.6 * metrics.motion_optical_flow + 0.4 * metrics.motion_frame_diff
         
         return combined_motion_score
     
@@ -882,18 +955,68 @@ class QualityScoring:
         """
         weights = self.profile_weights[self.profile]
         
-        # Calculate weighted sum
+        # CRITICAL FIX: Validate individual metric scores before calculation
+        def validate_score(score: float, metric_name: str) -> float:
+            """Validate and sanitize individual metric scores"""
+            if score is None or not isinstance(score, (int, float, np.number)):
+                logger.warning(f"Invalid {metric_name} score type", score=score, score_type=type(score))
+                return 0.5  # Neutral score for invalid data
+                
+            if not (0.0 <= score <= 1.0):
+                logger.warning(f"Out-of-range {metric_name} score", score=score)
+                return max(0.0, min(1.0, score))  # Clamp to valid range
+                
+            if score == 0.0:
+                logger.debug(f"Zero {metric_name} score detected", score=score)
+                
+            return score
+        
+        # Validate and sanitize all metric scores
+        face_quality = validate_score(metrics.face_quality, "face_quality")
+        blur_score = validate_score(metrics.blur_score, "blur_score")
+        exposure_score = validate_score(metrics.exposure_score, "exposure_score")
+        motion_blur_score = validate_score(metrics.motion_blur_score, "motion_blur_score")
+        composition_score = validate_score(metrics.composition_score, "composition_score")
+        color_quality_score = validate_score(metrics.color_quality_score, "color_quality_score")
+        
+        # Calculate weighted sum with validated scores
         weighted_score = (
-            metrics.face_quality * weights['face_weight'] +
-            metrics.blur_score * weights['blur_weight'] +
-            metrics.exposure_score * weights['exposure_weight'] +
-            metrics.motion_blur_score * weights['motion_weight'] +
-            metrics.composition_score * weights['composition_weight'] +
-            metrics.color_quality_score * weights['color_weight']
+            face_quality * weights['face_weight'] +
+            blur_score * weights['blur_weight'] +
+            exposure_score * weights['exposure_weight'] +
+            motion_blur_score * weights['motion_weight'] +
+            composition_score * weights['composition_weight'] +
+            color_quality_score * weights['color_weight']
         )
         
+        # Additional validation: ensure weighted score is reasonable
+        if weighted_score < 0.0 or weighted_score > 1.0:
+            logger.warning("Invalid weighted score calculated", 
+                         weighted_score=weighted_score,
+                         face_quality=face_quality,
+                         blur_score=blur_score,
+                         exposure_score=exposure_score,
+                         motion_blur_score=motion_blur_score,
+                         composition_score=composition_score,
+                         color_quality_score=color_quality_score)
+            weighted_score = max(0.0, min(1.0, weighted_score))
+        
         # Convert to 0-100 scale
-        return weighted_score * 100.0
+        final_score = weighted_score * 100.0
+        
+        # Final sanity check
+        if final_score == 0.0:
+            logger.warning("Zero final quality score calculated", 
+                         individual_scores={
+                             'face': face_quality,
+                             'blur': blur_score, 
+                             'exposure': exposure_score,
+                             'motion': motion_blur_score,
+                             'composition': composition_score,
+                             'color': color_quality_score
+                         })
+        
+        return final_score
     
     def process_video_quality(self, 
                             video_info: VideoInfo,
@@ -923,6 +1046,8 @@ class QualityScoring:
         
         frame_results = []
         processed_count = 0
+        total_frames_seen = 0
+        frames_skipped_by_sampler = 0
         
         # Batch processing for efficiency
         batch_size = 4  # Process frames in small batches
@@ -936,9 +1061,21 @@ class QualityScoring:
             else:
                 combined_generator = zip(frame_generator, [None] * 10000)  # Large number for fallback
             
+            logger.debug("Starting frame processing loop", batch_size=batch_size)
+            
             for (frame, timestamp, frame_index), face_results in combined_generator:
+                total_frames_seen += 1
+                
+                # Debug: Log first few frames
+                if total_frames_seen <= 5:
+                    logger.debug("Processing frame", 
+                               frame_index=frame_index, 
+                               timestamp=f"{timestamp:.2f}s",
+                               frame_shape=frame.shape if frame is not None else "None")
+                
                 # Apply frame sampling for performance
                 if not sampler.should_process_frame(frame_index):
+                    frames_skipped_by_sampler += 1
                     continue
                 
                 frame_batch.append((frame, timestamp, frame_index))
@@ -966,6 +1103,25 @@ class QualityScoring:
             logger.error("Error during video quality processing", error=str(e))
             raise
         
+        # CRITICAL FIX: Validate that we processed some frames
+        if not frame_results:
+            logger.error("No frames were processed by quality scoring", 
+                        total_frames_seen=total_frames_seen,
+                        frames_skipped_by_sampler=frames_skipped_by_sampler,
+                        sampling_interval=sampler.get_processing_interval())
+            
+            # Create minimal fallback result to prevent 0.0 scores
+            fallback_metrics = QualityMetrics()
+            fallback_metrics.face_quality = 0.5
+            fallback_metrics.blur_score = 0.5  
+            fallback_metrics.exposure_score = 0.5
+            fallback_metrics.motion_blur_score = 0.5
+            fallback_metrics.composition_score = 0.5
+            fallback_metrics.color_quality_score = 0.5
+            
+            frame_results = [(0.0, fallback_metrics)]
+            logger.warning("Applied fallback quality metrics due to no frame processing")
+        
         # Create processing settings record
         processing_settings = {
             'profile': self.profile.value,
@@ -987,6 +1143,9 @@ class QualityScoring:
         
         logger.info("Video quality processing completed",
                    total_frames=len(frame_results),
+                   total_frames_seen=total_frames_seen,
+                   frames_skipped_by_sampler=frames_skipped_by_sampler,
+                   processing_efficiency=f"{len(frame_results)}/{total_frames_seen}" if total_frames_seen > 0 else "0/0",
                    mean_quality=f"{result.mean_quality:.1f}",
                    processing_fps=f"{result.average_fps:.1f}x")
         

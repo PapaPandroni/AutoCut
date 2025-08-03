@@ -28,6 +28,17 @@ source env/bin/activate  # On Windows: env\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Install FFmpeg (required system dependency)
+# macOS:
+brew install ffmpeg
+
+# Ubuntu/Debian:
+sudo apt update && sudo apt install ffmpeg
+
+# Windows: Download from https://ffmpeg.org/download.html and add to PATH
+# Arch Linux: sudo pacman -S ffmpeg
+# CentOS/RHEL: sudo dnf install ffmpeg
 ```
 
 ### Basic Usage

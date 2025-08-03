@@ -312,6 +312,11 @@ class FaceDetectionEngine:
         self._total_processing_time = 0.0
         self._performance_lock = threading.Lock()
         
+        # Early exit optimization for videos without faces
+        self._consecutive_empty_frames = 0
+        self._early_exit_threshold = 10  # Skip processing after 10 consecutive frames without faces
+        self._early_exit_mode = False
+        
         # Initialize MediaPipe components
         self.mp_face_detection = mp.solutions.face_detection
         self.mp_drawing = mp.solutions.drawing_utils
@@ -443,12 +448,30 @@ class FaceDetectionEngine:
                       frame_index: int) -> FrameFaceDetectionResult:
         """Process a single frame for face detection"""
         start_time = time.time()
+        frame_height, frame_width = frame.shape[:2]
+        faces = []
+        
+        # Early exit optimization: skip heavy processing if video likely has no faces
+        if self._early_exit_mode:
+            # Skip expensive MediaPipe processing
+            processing_time = time.time() - start_time
+            
+            # Update performance metrics
+            with self._performance_lock:
+                self._total_frames_processed += 1
+                self._total_processing_time += processing_time
+            
+            return FrameFaceDetectionResult(
+                timestamp=timestamp,
+                frame_index=frame_index,
+                faces=[],  # No faces in early exit mode
+                processing_time=processing_time,
+                frame_width=frame_width,
+                frame_height=frame_height
+            )
         
         # Convert BGR to RGB for MediaPipe
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_height, frame_width = frame.shape[:2]
-        
-        faces = []
         
         with self._get_detector() as face_detection:
             # Set frame as not writeable for performance
@@ -482,6 +505,22 @@ class FaceDetectionEngine:
                     faces.append(face_result)
         
         processing_time = time.time() - start_time
+        
+        # Track consecutive empty frames for early exit optimization
+        if len(faces) == 0:
+            self._consecutive_empty_frames += 1
+            if self._consecutive_empty_frames >= self._early_exit_threshold:
+                if not self._early_exit_mode:
+                    logger.info("Activating early exit optimization for face detection",
+                              consecutive_empty_frames=self._consecutive_empty_frames,
+                              threshold=self._early_exit_threshold)
+                    self._early_exit_mode = True
+        else:
+            # Reset counter if faces are found
+            self._consecutive_empty_frames = 0
+            if self._early_exit_mode:
+                logger.info("Deactivating early exit optimization - faces detected again")
+                self._early_exit_mode = False
         
         # Update performance metrics
         with self._performance_lock:
@@ -659,6 +698,28 @@ def create_video_frame_generator(video_path: Union[str, Path]) -> Iterator[Tuple
             ret, frame = cap.read()
             if not ret:
                 break
+            
+            # CRITICAL FIX: Validate frame data before yielding
+            if frame is None:
+                logger.warning("Null frame detected", frame_index=frame_index)
+                frame_index += 1
+                continue
+                
+            if not isinstance(frame, np.ndarray):
+                logger.warning("Invalid frame type detected", frame_index=frame_index, frame_type=type(frame))
+                frame_index += 1
+                continue
+                
+            if frame.size == 0:
+                logger.warning("Empty frame detected", frame_index=frame_index)
+                frame_index += 1
+                continue
+                
+            # Additional validation for corrupted frames
+            if len(frame.shape) != 3 or frame.shape[2] != 3:
+                logger.warning("Invalid frame dimensions", frame_index=frame_index, shape=frame.shape)
+                frame_index += 1
+                continue
             
             timestamp = frame_index / fps
             yield frame, timestamp, frame_index

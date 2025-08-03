@@ -1,0 +1,145 @@
+{"event": "VideoToolbox hardware acceleration not available", "logger": "src.video.ingestion", "level": "warning", "timestamp": "2025-08-02T19:50:01.497091Z"}
+{"event": "VideoToolbox hardware acceleration not available", "logger": "src.video.ingestion", "level": "warning", "timestamp": "2025-08-02T19:50:01.776138Z"}
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1754164214.427083   49024 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164214.563498   49035 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+I0000 00:00:1754164214.566908   49025 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164214.585210   49028 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164214.589228   49044 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164214.598788   49033 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164214.614781   49039 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164214.636697   49053 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164214.639911   49045 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164214.656867   49048 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164214.657146   49061 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+W0000 00:00:1754164214.684984   49056 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164215.543191   49062 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164215.651522   49071 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164215.659926   49063 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164215.676168   49066 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164215.676173   49081 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164215.681209   49072 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164215.698892   49089 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+W0000 00:00:1754164215.730104   49084 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164215.795901   49073 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164215.804158   49075 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164215.829461   49097 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+W0000 00:00:1754164215.845849   49092 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164216.594208   49099 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164216.611128   49109 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164216.613936   49100 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164216.630046   49117 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+W0000 00:00:1754164216.631658   49104 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164216.634082   49101 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164216.647758   49111 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164216.652611   49126 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+W0000 00:00:1754164216.673869   49121 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164216.833743   49118 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164216.854378   49134 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+W0000 00:00:1754164216.883535   49129 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+/home/peremil/Documents/repos/AutoCut/env/lib/python3.12/site-packages/google/protobuf/symbol_database.py:55: UserWarning: SymbolDatabase.GetPrototype() is deprecated. Please use message_factory.GetMessageClass() instead. SymbolDatabase.GetPrototype() will be removed soon.
+  warnings.warn('SymbolDatabase.GetPrototype() is deprecated. Please '
+I0000 00:00:1754164217.465060   49135 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164217.484184   49146 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164217.488167   49138 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164217.500911   49141 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164217.505082   49154 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164217.507833   49137 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164217.524893   49149 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164217.581602   49162 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164217.584638   49136 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164217.603042   49170 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+W0000 00:00:1754164217.605002   49156 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1754164217.636326   49165 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164218.415126   49171 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164218.439848   49180 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164218.442620   49172 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164218.455872   49175 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164218.459876   49189 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164218.469273   49190 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164218.481200   49184 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164218.490542   49199 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164218.494824   49191 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164218.507754   49194 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164218.511577   49207 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+W0000 00:00:1754164218.533068   49202 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164219.346792   49208 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164219.364168   49218 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164219.368482   49209 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164219.393021   49213 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164219.482411   49226 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164219.489547   49210 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+W0000 00:00:1754164219.504593   49220 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1754164219.507032   49235 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+I0000 00:00:1754164219.511723   49227 gl_context_egl.cc:85] Successfully initialized EGL. Major : 1 Minor: 5
+I0000 00:00:1754164219.528816   49243 gl_context.cc:357] GL version: 3.2 (OpenGL ES 3.2 NVIDIA 470.256.02), renderer: NVIDIA GeForce GT 650M/PCIe/SSE2
+W0000 00:00:1754164219.558405   49238 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1754164219.635507   49230 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+🎬 AutoCut End-to-End Video Editing Prototype
+============================================================
+Complete pipeline from video ingestion to final render
+
+📹 Input Video: /home/peremil/Downloads/example_videos/853949-hd_1920_1080_25fps.mp4
+🎵 Music Track: /home/peremil/Downloads/this-heart-is-yours-242526.mp3
+
+Progress:   5% - Analyzing audio track...
+Progress:  15% - Analyzing video files...
+Progress:  70% - Generating beat-sync timeline...
+Progress: 100% - Processing complete!
+
+============================================================
+PIPELINE RESULTS
+============================================================
+Input Videos (1 files):
+  Total Duration: 15.1s
+  Video 1: 853949-hd_1920_1080_25fps.mp4 (15.1s, 1920x1080)
+  Primary Format: ContainerFormat.MP4
+  Primary Codec:  h264
+
+Audio Analysis:
+  BPM:         123.0
+  Beats:       369
+  Confidence:  0.96
+
+Scene Detection:
+  Total Scenes: 1
+  Video 1: 1 scenes
+
+Face Detection:
+  Total Faces: 0
+  Avg Quality: 0.00
+  Video 1: 0 faces
+
+Quality Scoring:
+  Avg Quality: 0.0
+  Video 1: 0.0 quality
+
+Timeline Generation:
+  Segments:    1
+  Avg Duration: 0.8s
+  Beat Sync:   0.0%
+  Scene Respect: 0.0%
+  Style:       musical
+
+Video Rendering:
+  Multi-video processing - no final rendering performed
+
+============================================================
+PROCESSING STATISTICS
+============================================================
+Video Duration:        15.08s
+Total Processing Time: 18.63s
+Overall Speed Factor:  0.8x real-time
+
+Component Breakdown:
+------------------------------
+  Video Ingestion        0.15s (  0.8%) [ 99.7x]
+  Audio Analysis         7.22s ( 38.7%) [  2.1x]
+  Scene Detection        4.50s ( 24.2%) [  3.4x]
+  Face Detection         6.26s ( 33.6%) [  2.4x]
+  Quality Scoring        0.50s (  2.7%) [ 30.1x]
+  Timeline Generation    0.00s (  0.0%) [45017.9x]
+  Video Rendering      skipped
+
+✅ Processing completed successfully!
