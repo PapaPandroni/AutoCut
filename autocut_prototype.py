@@ -1220,7 +1220,7 @@ def print_pipeline_results(results: Dict[str, Any]):
         print(f"\nFace Detection:")
         total_faces = sum(fd.get('total_faces_detected', 0) for fd in face_detections if fd)
         print(f"  Total Faces: {total_faces}")
-        avg_quality = sum(fd.get('average_face_quality', 0) for fd in face_detections if fd) / len([fd for fd in face_detections if fd]) if any(face_detections) else 0
+        avg_quality = sum(fd.get('overall_quality_score', 0) for fd in face_detections if fd) / len([fd for fd in face_detections if fd]) if any(face_detections) else 0
         print(f"  Avg Quality: {avg_quality:.2f}")
         for i, fd in enumerate(face_detections):
             if fd:

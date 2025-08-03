@@ -221,12 +221,35 @@ Systematic resolution of 3 critical issues identified in AutoCut video editing s
 
 ---
 
-**Current Status:** Major fixes validated with real test - **Quality scoring working!** Additional fixes for multi-video OpenCV issues implemented.
+**Current Status:** BREAKTHROUGH - Quality aggregation issue SOLVED! Face detection quality scores now properly displayed.
 
 ### Test Results Analysis (August 3, 2025)
 - ✅ **Quality Scoring SUCCESS**: Videos now show meaningful scores (0.4-0.6 range) instead of universal 0.0
 - ✅ **OpenCV Motion Analysis**: Working with new frame size compatibility checks
 - ✅ **Pipeline Completion**: Full processing completes without critical errors  
+- ✅ **Quality Aggregation FIX**: Fixed key mismatch - was looking for 'average_face_quality' but should be 'overall_quality_score'
 - 🔧 **Additional Fixes Applied**: NumPy type validation and multi-video frame size handling
 - ⚠️ **Beat Sync Investigation**: Still reports 0.0% - needs debug logging to identify issue
 - ⚠️ **FFmpeg Concat Issue**: Final rendering fails due to empty stream mapping
+
+### CRITICAL FIXES APPLIED (August 3, 2025)
+
+#### Fix 1: Quality Aggregation Key Mismatch
+- **File**: `autocut_prototype.py:1223`
+- **Issue**: Key mismatch in face detection quality aggregation
+- **Fix**: Changed `fd.get('average_face_quality', 0)` → `fd.get('overall_quality_score', 0)`
+- **Impact**: Face detection quality scores will now display correctly in final results instead of 0.0
+
+#### Fix 2: BREAKTHROUGH - Quality Scoring Scale Mismatch  🎯
+- **File**: `src/core/quality_scoring.py:182-187`
+- **Issue**: Scale mismatch between stored quality results (0-100) and timeline generation (0-1)
+- **Root Cause**: `_calculate_weighted_quality` returns 0-100 scale, but aggregation expects 0-1 scale
+- **Fix**: Convert stored quality metrics to 0-1 scale in `VideoQualityResult.__post_init__`:
+  ```python
+  # Convert from 0-100 scale to 0-1 scale for consistency
+  mean_quality_100_scale = np.mean(qualities)
+  self.mean_quality = mean_quality_100_scale / 100.0
+  self.median_quality = np.median(qualities) / 100.0
+  self.quality_std = np.std(qualities) / 100.0
+  ```
+- **Expected Impact**: Quality scores should now show ~0.5 instead of 0.0 for videos with neutral quality

@@ -179,9 +179,12 @@ class VideoQualityResult:
             
         if self.frame_results:
             qualities = [r.overall_quality for r in self.frame_results]
-            self.mean_quality = np.mean(qualities)
-            self.median_quality = np.median(qualities)
-            self.quality_std = np.std(qualities)
+            # CRITICAL FIX: Convert from 0-100 scale to 0-1 scale for consistency
+            mean_quality_100_scale = np.mean(qualities)
+            self.mean_quality = mean_quality_100_scale / 100.0
+            # CRITICAL FIX: Convert all quality metrics to 0-1 scale for consistency
+            self.median_quality = np.median(qualities) / 100.0
+            self.quality_std = np.std(qualities) / 100.0
             
             self.best_frame = max(self.frame_results, key=lambda r: r.overall_quality)
             self.worst_frame = min(self.frame_results, key=lambda r: r.overall_quality)

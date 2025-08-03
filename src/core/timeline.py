@@ -1966,12 +1966,20 @@ class BeatSyncTimelineGenerator:
             segments.append(segment)
             
             # ENHANCED FIX: Create cut points more systematically for musical editing
-            should_create_cut = True
-            
-            # Skip only the very first cut point (timeline start)
-            if i == 0 and timeline_position == 0.0:
+            # FIXED: Only skip the very first beat position at timeline start
+            if i == 0 and timeline_position == 0.0 and len(cut_points) == 0:
                 should_create_cut = False
                 logger.debug("Skipping initial timeline cut point")
+            else:
+                should_create_cut = True
+            
+            # Enhanced debug logging to track cut point decisions
+            logger.debug("Cut point decision analysis",
+                       beat_index=i,
+                       timeline_position=f"{timeline_position:.3f}s",
+                       beat_time=f"{beat_time:.3f}s",
+                       should_create_cut=should_create_cut,
+                       existing_cut_points=len(cut_points))
             
             if should_create_cut:
                 # Calculate actual beat alignment based on temporal proximity
@@ -1980,7 +1988,7 @@ class BeatSyncTimelineGenerator:
                 )
                 
                 cut_point = CutPoint(
-                    timestamp=beat_time,  # Use beat time, not timeline position
+                    timestamp=timeline_position,  # Output timeline domain (FIXED)
                     cut_type=CutType.BEAT_CUT,
                     confidence=0.9,
                     beat_alignment=actual_beat_alignment,  # Use calculated alignment, not hardcoded 1.0
@@ -1993,7 +2001,8 @@ class BeatSyncTimelineGenerator:
                            beat_index=i,
                            beat_time=f"{beat_time:.3f}s",
                            timeline_position=f"{timeline_position:.3f}s",
-                           beat_alignment=f"{actual_beat_alignment:.3f}")
+                           beat_alignment=f"{actual_beat_alignment:.3f}",
+                           total_cut_points=len(cut_points))
             else:
                 logger.debug("Skipped cut point creation", 
                            beat_index=i, 
@@ -2017,6 +2026,26 @@ class BeatSyncTimelineGenerator:
             duration=timeline_position,  # Use timeline domain accumulator
             editing_style=editing_style
         )
+        
+        # ENHANCED DEBUG: Analysis of cut point creation and beat sync calculation
+        beat_cuts = [cp for cp in cut_points if cp.cut_type == CutType.BEAT_CUT]
+        logger.debug("Cut point creation analysis",
+                   total_beats=len(audio_analysis.beats),
+                   segments_created=len(segments),
+                   cut_points_created=len(cut_points),
+                   beat_cuts_created=len(beat_cuts),
+                   final_timeline_duration=f"{timeline_position:.3f}s",
+                   music_duration=f"{audio_analysis.duration:.3f}s")
+        
+        if beat_cuts:
+            alignments = [cp.beat_alignment for cp in beat_cuts]
+            logger.debug("Beat alignment analysis",
+                       beat_cut_alignments=alignments[:10],  # First 10 for readability
+                       avg_alignment=f"{sum(alignments)/len(alignments):.3f}",
+                       max_alignment=f"{max(alignments):.3f}",
+                       min_alignment=f"{min(alignments):.3f}")
+        else:
+            logger.warning("No BEAT_CUT type cut points created - beat sync will be 0.0%")
         
         return timeline
     
@@ -2075,12 +2104,12 @@ class BeatSyncTimelineGenerator:
         """
         Calculate actual beat alignment based on temporal proximity
         
-        This replaces the artificial beat_alignment=1.0 with a real calculation
-        based on how close the cut actually is to the intended beat.
+        For multi-video editing: Calculate how well timeline position aligns with beat structure.
+        FIXED: Now correctly compares within same temporal domain.
         
         Args:
-            beat_time: The intended beat timestamp 
-            timeline_position: The actual timeline position where cut occurs
+            beat_time: The intended beat timestamp (music domain)
+            timeline_position: The actual timeline position where cut occurs (output domain)
             beats: List of all beat timestamps
             beat_index: Index of current beat in the beats list
             
@@ -2088,8 +2117,12 @@ class BeatSyncTimelineGenerator:
             Float between 0.0 and 1.0 representing actual beat alignment
         """
         try:
-            # Calculate temporal distance between intended beat and actual cut position
-            time_difference = abs(beat_time - timeline_position)
+            # FIXED: For multi-video editing, timeline follows music structure
+            # So timeline position should align with beat time directly
+            intended_timeline_position = beat_time  # In multi-video, timeline follows music
+            
+            # Calculate temporal distance in same domain (FIXED)
+            time_difference = abs(timeline_position - intended_timeline_position)
             
             # Calculate beat interval for normalization
             if beat_index < len(beats) - 1:

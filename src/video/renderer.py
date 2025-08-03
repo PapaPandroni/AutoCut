@@ -1650,19 +1650,19 @@ class VideoRenderer:
                         str(clip_path),
                         ss=segment.source_start_time,
                         t=segment.duration,
-                        vcodec='libx264',      # Re-encode when needed
-                        acodec='aac',          # Re-encode audio
-                        crf=23,                # Balanced quality (faster than 18)
-                        preset='ultrafast',    # Maximum speed instead of 'medium'
-                        # Preserve timing without CFR frame dropping  
-                        copyts=None,           # Copy timestamps to preserve timing (flag only)
-                        start_at_zero=None,    # Start at zero but maintain relative timing (flag only)
-                        avoid_negative_ts='disabled',  # Preserve original timing relationships
-                        fflags='+genpts',      # Generate PTS only - removed igndts
-                        # Reduced quality parameters for speed
-                        video_bitrate='3M',    # Lower bitrate for faster encoding
-                        maxrate='6M',          # Reduced headroom
-                        bufsize='6M'           # Smaller buffer for speed
+                        vcodec='libx264',              # Re-encode for frame accuracy
+                        acodec='aac',                  # Re-encode audio for compatibility
+                        preset='ultrafast',            # Balance speed vs quality  
+                        crf=23,                        # Reasonable quality
+                        force_key_frames='expr:gte(t,0)',  # Force keyframe at start
+                        # Fast encoding settings
+                        threads=0,                     # Use all CPU cores
+                        tune='zerolatency',           # Optimize for speed
+                        profile='baseline',           # Ensure compatibility
+                        # Frame-accurate cutting
+                        avoid_negative_ts='disabled', # Preserve timing relationships
+                        copyts=None,                  # Don't copy timestamps for re-encode
+                        fflags='+genpts'              # Generate PTS for timing accuracy
                     )
                 else:
                     # Use high-speed stream copying (35x performance)
@@ -1758,8 +1758,9 @@ class VideoRenderer:
         """
         Determine whether a segment needs re-encoding or can use stream copy
         
-        Stream copy provides 35x+ performance but requires compatible formats.
-        Re-encoding ensures quality but is 50-70x slower.
+        CONSULTANT RECOMMENDATION: Stream copy fails with non-keyframe cuts
+        causing "Stream map '0' matches no streams" errors and duration mismatches.
+        Force re-encoding for reliability until stream copy issues are resolved.
         
         Args:
             video_info: Video file information
@@ -1768,51 +1769,10 @@ class VideoRenderer:
         Returns:
             True if re-encoding is required, False if stream copy is sufficient
         """
-        try:
-            # Check 1: Codec compatibility - H.264 is widely compatible for stream copy
-            if video_info.primary_video_stream:
-                codec = video_info.primary_video_stream.codec
-                
-                # H.264 and H.265 are usually safe for stream copy
-                if codec.value in ['h264', 'hevc']:
-                    logger.debug("Codec supports stream copy", codec=codec.value)
-                    
-                    # Check 2: Resolution compatibility - avoid re-encoding for standard resolutions
-                    width, height = video_info.resolution
-                    
-                    # Most common resolutions work well with stream copy
-                    if width <= 4096 and height <= 2160:  # Up to 4K
-                        logger.debug("Resolution supports stream copy", resolution=f"{width}x{height}")
-                        
-                        # Check 3: Segment duration - very short segments might benefit from re-encoding
-                        if hasattr(segment, 'duration') and segment.duration >= 1.0:
-                            logger.debug("Duration supports stream copy", duration=f"{segment.duration:.2f}s")
-                            
-                            # Check 4: Container format - MP4 is ideal for stream copy
-                            if video_info.container_format.value in ['mp4', 'mov']:
-                                logger.debug("Container supports stream copy", 
-                                           container=video_info.container_format.value)
-                                return False  # Use stream copy - 35x performance!
-                            else:
-                                logger.debug("Container requires re-encoding", 
-                                           container=video_info.container_format.value)
-                        else:
-                            logger.debug("Short duration requires re-encoding for stability",
-                                       duration=getattr(segment, 'duration', 'unknown'))
-                    else:
-                        logger.debug("High resolution requires re-encoding", 
-                                   resolution=f"{width}x{height}")
-                else:
-                    logger.debug("Codec requires re-encoding", codec=codec.value)
-            else:
-                logger.debug("No video stream info - requiring re-encoding")
-            
-            # Default to re-encoding for safety
-            return True
-            
-        except Exception as e:
-            logger.warning("Error in codec decision - defaulting to re-encoding", error=str(e))
-            return True
+        # FORCE RE-ENCODING for reliability (consultant recommendation)
+        # Stream copy is too unreliable with non-keyframe cuts
+        logger.debug("Forcing re-encoding for reliability (stream copy disabled)")
+        return True  # Always re-encode for frame-accurate cuts
     
     def _render_final_video_with_music(self, concat_file: Path, music_path: Optional[Path],
                                      output_path: Path, render_options, timeline_duration: float,
@@ -1928,6 +1888,27 @@ class VideoRenderer:
                         error_type=type(e).__name__)
             raise RuntimeError(f"Video rendering failed due to unexpected error: {str(e)}")
     
+    def _detect_stream_copy_failure(self, stderr: str) -> bool:
+        """
+        Detect if FFmpeg failed due to stream copy issues
+        
+        Args:
+            stderr: FFmpeg error output
+            
+        Returns:
+            True if error is related to stream copy failure
+        """
+        stream_copy_errors = [
+            "Stream map '0' matches no streams",
+            "Invalid argument",
+            "No such file or directory", 
+            "Duration too small",
+            "Invalid data found when processing input",
+            "Decoder not found",
+            "Error while filtering"
+        ]
+        return any(error in stderr for error in stream_copy_errors)
+    
     def _handle_ffmpeg_error(self, stderr_text: str, cmd_text: str, output_path: Path, render_options):
         """Handle FFmpeg errors with detailed categorization and logging"""
         
@@ -1938,6 +1919,17 @@ class VideoRenderer:
                     stderr=stderr_text,
                     cmd=cmd_text,
                     ffmpeg_params=render_options.ffmpeg_params)
+        
+        # Check for stream copy failures
+        if self._detect_stream_copy_failure(stderr_text):
+            logger.error("FFmpeg failed due to stream copy issue",
+                       stderr=stderr_text[:200],
+                       recommendation="Using re-encoding should fix this")
+            raise RuntimeError(
+                f"Stream copy failure detected. This error typically occurs when cutting at non-keyframe positions. "
+                f"The system should automatically use re-encoding for reliability. "
+                f"Error details: {stderr_text[:200]}..."
+            )
         
         # Check for specific path-related errors
         if "Unable to choose an output format" in stderr_text and "True" in stderr_text:
